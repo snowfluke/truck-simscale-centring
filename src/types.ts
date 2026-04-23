@@ -11,16 +11,21 @@ export interface SensorProfile {
   name: string;
   height: number;
   beamWidth: number; // degrees
-  tilt: number; // degrees
+  tiltVertical: number; // degrees
+  tiltHorizontal: number; // degrees
+  maxRange: number; // meters
 }
 
-export interface SensorPair {
+export interface SensorItem {
   id: string;
   name: string;
   z: number;
   height: number;
   beamWidth: number;
-  tilt: number;
+  tiltVertical: number;
+  tiltHorizontal: number;
+  maxRange: number;
+  placement: "left" | "right";
 }
 
 export interface Vector3Obj {
