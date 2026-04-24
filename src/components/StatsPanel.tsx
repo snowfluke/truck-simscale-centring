@@ -14,36 +14,124 @@ export function StatsPanel() {
     useSensorCalculations();
   const isSidebarOpen = useStore((s) => s.isSidebarOpen);
   const truck = useStore((s) => s.truck);
+  const scale = useStore((s) => s.scale);
+  const sensors = useStore((s) => s.sensors);
 
   const [showCalcModal, setShowCalcModal] = useState(false);
   const [infoModal, setInfoModal] = useState<"truth" | "delta" | "goal" | null>(
     null,
   );
 
-  let instructorStatus = "unseen"; // 'unseen' | 'guiding' | 'centered'
-  let instruction = "AWAITING VEHICLE ENTRY";
-  let cmd = "NO DETECTION";
+  // --- Start Compute Entry State ---
+  const maxSensorZ = sensors.reduce(
+    (maxZ, s) => Math.max(maxZ, s.z),
+    -Infinity,
+  );
+  // Using the foremost sensors to define the "entrance" line. Default to scale start.
+  const entranceZ = maxSensorZ !== -Infinity ? maxSensorZ : scale.length / 2;
 
-  if (sensorCenter !== null) {
-    if (Math.abs(sensorCenter) < 0.2) {
-      instructorStatus = "centered";
-      instruction = "Perfectly Centered";
-      cmd = "STOP / HOLD";
-    } else if (sensorCenter > 0) {
-      instructorStatus = "guiding";
-      instruction = `Estimated by Sensor Array (Δ ${sensorCenter.toFixed(2)}m)`;
-      cmd = `MOVE FORWARD ${Math.abs(sensorCenter).toFixed(2)}m`;
+  const tf = truck.z - truck.length / 2; // Truck Front (moving towards negative Z)
+  const tb = truck.z + truck.length / 2; // Truck Back
+  const scaleEnd = -scale.length / 2;
+
+  let entryState = "OUT"; // OUT is before entrance
+  if (tb < entranceZ && tf > scaleEnd) {
+    entryState = "FULLY IN";
+  } else if (tf <= entranceZ && tb >= entranceZ) {
+    entryState = "IN";
+  } else if (tf <= scaleEnd && tb > scaleEnd) {
+    entryState = "EXITING";
+  } else if (tb <= scaleEnd) {
+    entryState = "DEPARTED";
+  }
+  // --- End Compute Entry State ---
+
+  const activeLeftCount = readings.filter(
+    (r) => r.hit && r.sensor?.placement === "left",
+  ).length;
+  const activeRightCount = readings.filter(
+    (r) => r.hit && r.sensor?.placement === "right",
+  ).length;
+
+  let instructorStatus = "unseen"; // 'unseen' | 'guiding' | 'centered' | 'exiting'
+  let instruction = "Driver should slowly drive onto the scale.";
+  let cmd = "AWAITING VEHICLE ENTRY";
+
+  if (entryState === "IN") {
+    cmd = "VEHICLE ENTERING";
+    instruction = "Scanning vehicle profile. Keep moving slowly.";
+  } else if (entryState === "FULLY IN") {
+    cmd = "TRUCK ON SCALE";
+    instruction = "Perform adjustments if needed.";
+  } else if (entryState === "EXITING") {
+    instructorStatus = "exiting";
+    cmd = "VEHICLE EXITING";
+    instruction = "Vehicle is leaving the scale.";
+  } else if (entryState === "DEPARTED") {
+    cmd = "VEHICLE DEPARTED";
+    instruction = "Waiting for next vehicle.";
+  }
+
+  if (
+    sensorCenter !== null &&
+    (entryState === "IN" || entryState === "FULLY IN")
+  ) {
+    const topHits = readings.filter((r) => r.hit && (r.sensor?.z ?? 0) < 0);
+    const bottomHits = readings.filter((r) => r.hit && (r.sensor?.z ?? 0) > 0);
+
+    if (entryState === "FULLY IN") {
+      if (topHits.length === 0) {
+        instructorStatus = "guiding";
+        instruction = "Move forward until hitting the top half sensors.";
+        cmd = "MOVE FORWARD";
+      } else if (bottomHits.length === 0) {
+        instructorStatus = "guiding";
+        instruction = "Move backward until hitting the bottom half sensors.";
+        cmd = "MOVE BACKWARD";
+      } else {
+        const farthestTop = Math.max(
+          ...topHits.map((r) => Math.abs(r.sensor.z)),
+        );
+        const farthestBottom = Math.max(
+          ...bottomHits.map((r) => Math.abs(r.sensor.z)),
+        );
+
+        if (farthestTop < farthestBottom) {
+          instructorStatus = "guiding";
+          instruction = `Top < Bottom (Δ ${Math.abs(sensorCenter).toFixed(2)}m)`;
+          cmd = `MOVE FORWARD ${Math.abs(sensorCenter).toFixed(2)}m`;
+        } else if (farthestTop > farthestBottom) {
+          instructorStatus = "guiding";
+          instruction = `Top > Bottom (Δ ${Math.abs(sensorCenter).toFixed(2)}m)`;
+          cmd = `MOVE BACKWARD ${Math.abs(sensorCenter).toFixed(2)}m`;
+        } else {
+          instructorStatus = "centered";
+          instruction = "Balanced on both sides";
+          cmd = "TRUCK FULLY IN, STOP!";
+        }
+      }
     } else {
-      instructorStatus = "guiding";
-      instruction = `Estimated by Sensor Array (Δ ${Math.abs(sensorCenter).toFixed(2)}m)`;
-      cmd = `MOVE BACKWARD ${Math.abs(sensorCenter).toFixed(2)}m`;
+      // entryState === "IN"
+      if (Math.abs(sensorCenter) < 0.2) {
+        instructorStatus = "centered";
+        instruction = "Perfectly Centered";
+        cmd = "STOP / HOLD";
+      } else if (sensorCenter > 0) {
+        instructorStatus = "guiding";
+        instruction = `Estimated by Sensor Array (Δ ${sensorCenter.toFixed(2)}m)`;
+        cmd = `MOVE FORWARD ${Math.abs(sensorCenter).toFixed(2)}m`;
+      } else {
+        instructorStatus = "guiding";
+        instruction = `Estimated by Sensor Array (Δ ${Math.abs(sensorCenter).toFixed(2)}m)`;
+        cmd = `MOVE BACKWARD ${Math.abs(sensorCenter).toFixed(2)}m`;
+      }
     }
   }
 
-  let cmdBgClass = "bg-red-500/95 border-l-4 border-red-700";
-  let cmdTitleClass = "text-red-200";
+  let cmdBgClass = "bg-slate-800/95 border-l-4 border-slate-500";
+  let cmdTitleClass = "text-slate-300";
   let cmdValueClass = "text-white";
-  let cmdDetailsClass = "text-red-100";
+  let cmdDetailsClass = "text-slate-400";
 
   if (instructorStatus === "guiding") {
     cmdBgClass = "bg-yellow-400/95 border-l-4 border-yellow-600";
@@ -55,6 +143,44 @@ export function StatsPanel() {
     cmdTitleClass = "text-emerald-200";
     cmdValueClass = "text-white";
     cmdDetailsClass = "text-emerald-100";
+  } else if (instructorStatus === "exiting") {
+    cmdBgClass = "bg-orange-500/95 border-l-4 border-orange-700";
+    cmdTitleClass = "text-orange-200";
+    cmdValueClass = "text-white";
+    cmdDetailsClass = "text-orange-100";
+  } else if (
+    entryState === "FULLY IN" &&
+    instructorStatus !== "centered" &&
+    instructorStatus !== "guiding"
+  ) {
+    // We are fully in but no center determination could be made (all missed?)
+    cmdBgClass = "bg-blue-600/90 border-l-4 border-blue-400";
+    cmdTitleClass = "text-blue-200";
+  }
+
+  // Override for extreme unbalance
+  if (
+    (entryState === "IN" || entryState === "FULLY IN") &&
+    activeLeftCount > 0 &&
+    activeRightCount === 0
+  ) {
+    cmd = "MOVE FORWARD";
+    cmdBgClass = "bg-amber-500/90 border-l-4 border-amber-700";
+    cmdTitleClass = "text-amber-200";
+    cmdValueClass = "text-white";
+    cmdDetailsClass = "text-amber-100";
+    instruction = "Getting too close to LEFT sensors.";
+  } else if (
+    (entryState === "IN" || entryState === "FULLY IN") &&
+    activeRightCount > 0 &&
+    activeLeftCount === 0
+  ) {
+    cmd = "MOVE BACKWARD";
+    cmdBgClass = "bg-amber-500/90 border-l-4 border-amber-700";
+    cmdTitleClass = "text-amber-200";
+    cmdValueClass = "text-white";
+    cmdDetailsClass = "text-amber-100";
+    instruction = "Getting too close to RIGHT sensors.";
   }
 
   let engineerStatus = "off-center";

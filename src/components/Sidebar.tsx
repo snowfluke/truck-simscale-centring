@@ -7,6 +7,9 @@ import {
   Save,
   Download,
   Upload,
+  ChevronDown,
+  ChevronUp,
+  Copy,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -37,6 +40,9 @@ export function Sidebar() {
   const [activeTab, setActiveTab] = useState("Truck");
   const [newTruckName, setNewTruckName] = useState("");
   const [showNewSensor, setShowNewSensor] = useState(false);
+  const [expandedSensors, setExpandedSensors] = useState<
+    Record<string, boolean>
+  >({});
   const [newSensorData, setNewSensorData] = useState({
     name: "",
     height: 2.5,
@@ -463,156 +469,197 @@ export function Sidebar() {
               </div>
 
               <div className="space-y-4">
-                {sensors.map((s, idx) => (
-                  <div
-                    key={s.id}
-                    className="relative pb-4 border-b border-slate-100 last:border-0 last:pb-0"
-                  >
-                    <button
-                      onClick={() => removeSensorItem(s.id)}
-                      className="absolute top-0 right-0 text-slate-400 hover:text-red-500 text-xs"
+                {sensors.map((s, idx) => {
+                  const isExpanded = expandedSensors[s.id] ?? false;
+                  return (
+                    <div
+                      key={s.id}
+                      className="relative pb-4 border-b border-slate-100 last:border-0 last:pb-0"
                     >
-                      ×
-                    </button>
-                    <div className="text-[11px] font-semibold text-slate-700 mb-2">
-                      {s.name} - #{idx + 1}
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="col-span-2">
-                        <label className="block text-[10px] text-slate-500 mb-1">
-                          Placement side
-                        </label>
-                        <div className="flex border border-slate-200 rounded bg-slate-50 overflow-hidden">
+                      <div className="flex justify-between items-center mb-2">
+                        <div
+                          className="text-[11px] font-semibold text-slate-700 cursor-pointer flex items-center group"
+                          onClick={() =>
+                            setExpandedSensors((prev) => ({
+                              ...prev,
+                              [s.id]: !isExpanded,
+                            }))
+                          }
+                        >
+                          {isExpanded ? (
+                            <ChevronUp
+                              size={12}
+                              className="mr-1 text-slate-400 group-hover:text-slate-600"
+                            />
+                          ) : (
+                            <ChevronDown
+                              size={12}
+                              className="mr-1 text-slate-400 group-hover:text-slate-600"
+                            />
+                          )}
+                          {s.name} - #{idx + 1}
+                        </div>
+                        <div className="flex items-center gap-2">
                           <button
-                            onClick={() =>
-                              updateSensor(s.id, { placement: "left" })
-                            }
-                            className={clsx(
-                              "flex-1 text-[11px] py-1 font-medium",
-                              s.placement === "left"
-                                ? "bg-white shadow text-slate-800"
-                                : "text-slate-400 hover:text-slate-600",
-                            )}
+                            onClick={() => {
+                              const { id, ...rest } = s;
+                              addSensorItem(rest);
+                            }}
+                            className="text-slate-400 hover:text-blue-500 transition-colors"
+                            title="Duplicate Sensor"
                           >
-                            Left
+                            <Copy size={12} />
                           </button>
                           <button
-                            onClick={() =>
-                              updateSensor(s.id, { placement: "right" })
-                            }
-                            className={clsx(
-                              "flex-1 text-[11px] py-1 font-medium",
-                              s.placement === "right"
-                                ? "bg-white shadow text-slate-800"
-                                : "text-slate-400 hover:text-slate-600",
-                            )}
+                            onClick={() => removeSensorItem(s.id)}
+                            className="text-slate-400 hover:text-red-500 text-xs font-bold"
+                            title="Remove Sensor"
                           >
-                            Right
+                            ×
                           </button>
                         </div>
                       </div>
-                      <div>
-                        <label className="block text-[11px] text-slate-500 mb-1">
-                          Height (m)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.5"
-                          value={s.height}
-                          onChange={(e) =>
-                            updateSensor(s.id, {
-                              height: Number(e.target.value),
-                            })
-                          }
-                          className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[12px]"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] text-slate-500 mb-1">
-                          Z Pos (%)
-                        </label>
-                        <input
-                          type="number"
-                          step="5"
-                          value={Math.round((s.z / (scale.length / 2)) * 100)}
-                          onChange={(e) =>
-                            updateSensor(s.id, {
-                              z:
-                                (Number(e.target.value) / 100) *
-                                (scale.length / 2),
-                            })
-                          }
-                          className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[12px]"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] text-slate-500 mb-1">
-                          Beam (&deg;)
-                        </label>
-                        <input
-                          type="number"
-                          step="1"
-                          value={s.beamWidth}
-                          onChange={(e) =>
-                            updateSensor(s.id, {
-                              beamWidth: Number(e.target.value),
-                            })
-                          }
-                          className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[12px]"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] text-slate-500 mb-1">
-                          TiltV (&deg;)
-                        </label>
-                        <input
-                          type="number"
-                          step="1"
-                          value={s.tiltVertical ?? (s as any).tilt ?? 0}
-                          onChange={(e) =>
-                            updateSensor(s.id, {
-                              tiltVertical: Number(e.target.value),
-                            })
-                          }
-                          className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[12px]"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] text-slate-500 mb-1">
-                          TiltH (&deg;)
-                        </label>
-                        <input
-                          type="number"
-                          step="1"
-                          value={s.tiltHorizontal ?? 0}
-                          onChange={(e) =>
-                            updateSensor(s.id, {
-                              tiltHorizontal: Number(e.target.value),
-                            })
-                          }
-                          className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[12px]"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] text-slate-500 mb-1">
-                          Max Range (m)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.5"
-                          value={s.maxRange || 4.5}
-                          onChange={(e) =>
-                            updateSensor(s.id, {
-                              maxRange: Number(e.target.value),
-                            })
-                          }
-                          className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[12px]"
-                        />
-                      </div>
+
+                      {isExpanded && (
+                        <div className="grid grid-cols-2 gap-2 mt-3">
+                          <div className="col-span-2">
+                            <label className="block text-[10px] text-slate-500 mb-1">
+                              Placement side
+                            </label>
+                            <div className="flex border border-slate-200 rounded bg-slate-50 overflow-hidden">
+                              <button
+                                onClick={() =>
+                                  updateSensor(s.id, { placement: "left" })
+                                }
+                                className={clsx(
+                                  "flex-1 text-[11px] py-1 font-medium",
+                                  s.placement === "left"
+                                    ? "bg-white shadow text-slate-800"
+                                    : "text-slate-400 hover:text-slate-600",
+                                )}
+                              >
+                                Left
+                              </button>
+                              <button
+                                onClick={() =>
+                                  updateSensor(s.id, { placement: "right" })
+                                }
+                                className={clsx(
+                                  "flex-1 text-[11px] py-1 font-medium",
+                                  s.placement === "right"
+                                    ? "bg-white shadow text-slate-800"
+                                    : "text-slate-400 hover:text-slate-600",
+                                )}
+                              >
+                                Right
+                              </button>
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-slate-500 mb-1">
+                              Height (m)
+                            </label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={s.height}
+                              onChange={(e) =>
+                                updateSensor(s.id, {
+                                  height: Number(e.target.value),
+                                })
+                              }
+                              className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[12px]"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-slate-500 mb-1">
+                              Z Pos (%)
+                            </label>
+                            <input
+                              type="number"
+                              step="5"
+                              value={Math.round(
+                                (s.z / (scale.length / 2)) * 100,
+                              )}
+                              onChange={(e) =>
+                                updateSensor(s.id, {
+                                  z:
+                                    (Number(e.target.value) / 100) *
+                                    (scale.length / 2),
+                                })
+                              }
+                              className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[12px]"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-slate-500 mb-1">
+                              Beam (&deg;)
+                            </label>
+                            <input
+                              type="number"
+                              step="1"
+                              value={s.beamWidth}
+                              onChange={(e) =>
+                                updateSensor(s.id, {
+                                  beamWidth: Number(e.target.value),
+                                })
+                              }
+                              className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[12px]"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-slate-500 mb-1">
+                              TiltV (&deg;)
+                            </label>
+                            <input
+                              type="number"
+                              step="1"
+                              value={s.tiltVertical ?? (s as any).tilt ?? 0}
+                              onChange={(e) =>
+                                updateSensor(s.id, {
+                                  tiltVertical: Number(e.target.value),
+                                })
+                              }
+                              className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[12px]"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-slate-500 mb-1">
+                              TiltH (&deg;)
+                            </label>
+                            <input
+                              type="number"
+                              step="1"
+                              value={s.tiltHorizontal ?? 0}
+                              onChange={(e) =>
+                                updateSensor(s.id, {
+                                  tiltHorizontal: Number(e.target.value),
+                                })
+                              }
+                              className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[12px]"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-slate-500 mb-1">
+                              Max Range (m)
+                            </label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={s.maxRange || 4.5}
+                              onChange={(e) =>
+                                updateSensor(s.id, {
+                                  maxRange: Number(e.target.value),
+                                })
+                              }
+                              className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[12px]"
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
