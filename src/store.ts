@@ -149,7 +149,7 @@ interface GameState {
   sensors: SensorItem[];
   sensorProfiles: SensorProfile[];
   addSensorRaw: (s: SensorItem) => void;
-  addSensorItem: (profile?: SensorProfile) => void;
+  addSensorItem: (profile?: Partial<SensorItem> | SensorProfile) => void;
   updateSensor: (id: string, s: Partial<SensorItem>) => void;
   removeSensorItem: (id: string) => void;
   addSensorProfile: (p: SensorProfile) => void;
@@ -230,19 +230,20 @@ export const useStore = create<GameState>((set, get) => ({
   addSensorItem: (profile) =>
     set((s) => {
       const p = profile || s.sensorProfiles[0];
+      const pItem = p as Partial<SensorItem>;
       return {
         sensors: [
           ...s.sensors,
           {
             id: `s-${Date.now()}`,
-            name: p ? p.name : "Unknown Sensor",
-            z: 0,
-            height: p ? p.height : 2.5,
-            beamWidth: p ? p.beamWidth : 50,
-            tiltVertical: p ? p.tiltVertical : 0,
-            tiltHorizontal: p ? p.tiltHorizontal : 0,
-            maxRange: p && p.maxRange ? p.maxRange : 4.5,
-            placement: "left",
+            name: p?.name || "Unknown Sensor",
+            z: pItem.z ?? 0,
+            height: p?.height ?? 2.5,
+            beamWidth: p?.beamWidth ?? 50,
+            tiltVertical: p?.tiltVertical ?? 0,
+            tiltHorizontal: p?.tiltHorizontal ?? 0,
+            maxRange: p?.maxRange ?? 4.5,
+            placement: pItem.placement ?? "left",
           },
         ],
       };
@@ -483,7 +484,24 @@ export function useSensorCalculations() {
   });
 
   let sensorCenter = null;
-  if (overallZMin <= overallZMax && overallZMin !== Infinity) {
+  const topHits = readings.filter((r) => r.hit && r.z < 0);
+  const bottomHits = readings.filter((r) => r.hit && r.z >= 0);
+
+  let farthestTop = 0;
+  let farthestBottom = 0;
+
+  if (topHits.length > 0) {
+    farthestTop = Math.max(...topHits.map((r) => Math.abs(r.z)));
+  }
+  if (bottomHits.length > 0) {
+    farthestBottom = Math.max(...bottomHits.map((r) => Math.abs(r.z)));
+  }
+
+  if (topHits.length > 0 && bottomHits.length > 0) {
+    // Diffing top half and bottom half sensor that detect the truck
+    sensorCenter = (farthestBottom - farthestTop) / 2;
+  } else if (overallZMin <= overallZMax && overallZMin !== Infinity) {
+    // Fallback if it hasn't hit top half yet, estimate using bounding box
     sensorCenter = (overallZMin + overallZMax) / 2;
   }
 
@@ -497,6 +515,8 @@ export function useSensorCalculations() {
       overallZMin,
       overallZMax,
       debugSensors,
+      farthestTop,
+      farthestBottom,
     },
   };
 }

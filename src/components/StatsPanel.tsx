@@ -23,13 +23,13 @@ export function StatsPanel() {
   );
 
   const activeLeftCount = readings.filter(
-    (r) => r.hit && r.sensor?.placement === "left",
+    (r) => r.hit && r.placement === "left",
   ).length;
   const activeRightCount = readings.filter(
-    (r) => r.hit && r.sensor?.placement === "right",
+    (r) => r.hit && r.placement === "right",
   ).length;
-  const topHits = readings.filter((r) => r.hit && (r.sensor?.z ?? 0) < 0);
-  const bottomHits = readings.filter((r) => r.hit && (r.sensor?.z ?? 0) >= 0);
+  const topHits = readings.filter((r) => r.hit && (r.z ?? 0) < 0);
+  const bottomHits = readings.filter((r) => r.hit && (r.z ?? 0) >= 0);
   const totalHits = readings.filter((r) => r.hit).length;
 
   let instructorStatus = "unseen"; // 'unseen' | 'guiding' | 'centered'
@@ -47,21 +47,14 @@ export function StatsPanel() {
     instruction = "Move forward until hitting the top half sensors.";
     cmd = `MOVE FORWARD ${nStr}m`;
   } else {
-    const farthestTop = Math.max(...topHits.map((r) => Math.abs(r.sensor.z)));
-    const farthestBottom =
-      bottomHits.length > 0
-        ? Math.max(...bottomHits.map((r) => Math.abs(r.sensor.z)))
-        : 0;
+    const distanceStr =
+      sensorCenter !== null ? Math.abs(sensorCenter).toFixed(2) : "0.00";
 
-    const diff = farthestBottom - farthestTop;
-    const delta = Math.abs(diff) / 2;
-    const distanceStr = delta.toFixed(2);
-
-    if (delta <= 0.2) {
+    if (sensorCenter !== null && Math.abs(sensorCenter) <= 0.2) {
       instructorStatus = "centered";
       instruction = "Balanced on both sides";
       cmd = "TRUCK FULLY IN, STOP!";
-    } else if (farthestTop < farthestBottom) {
+    } else if (sensorCenter !== null && sensorCenter > 0) {
       instructorStatus = "guiding";
       instruction = `Top < Bottom (Δ ${distanceStr}m)`;
       cmd = `MOVE FORWARD ${distanceStr}m`;
@@ -472,20 +465,41 @@ export function StatsPanel() {
                 </h4>
                 {sensorCenter !== null ? (
                   <pre className="font-mono text-[12px] whitespace-pre-wrap leading-relaxed space-y-2">
-                    <div>
-                      overallZMin = min(all overlapMins) ={" "}
-                      {calcDetails.overallZMin.toFixed(3)}
-                    </div>
-                    <div>
-                      overallZMax = max(all overlapMaxs) ={" "}
-                      {calcDetails.overallZMax.toFixed(3)}
-                    </div>
-                    <div className="border-t border-slate-600 pt-2 text-emerald-400 font-bold text-sm">
-                      sensorCenter = (overallZMin + overallZMax) / 2 = (
-                      {calcDetails.overallZMin.toFixed(3)} +{" "}
-                      {calcDetails.overallZMax.toFixed(3)}) / 2 ={" "}
-                      {sensorCenter.toFixed(3)}m
-                    </div>
+                    {calcDetails.farthestTop && calcDetails.farthestBottom ? (
+                      <>
+                        <div>
+                          farthestBottom = max(abs(z) of hit bottom sensors) ={" "}
+                          {calcDetails.farthestBottom.toFixed(3)}
+                        </div>
+                        <div>
+                          farthestTop = max(abs(z) of hit top sensors) ={" "}
+                          {calcDetails.farthestTop.toFixed(3)}
+                        </div>
+                        <div className="border-t border-slate-600 pt-2 text-emerald-400 font-bold text-sm">
+                          sensorCenter = (farthestBottom - farthestTop) / 2 = (
+                          {calcDetails.farthestBottom.toFixed(3)} -{" "}
+                          {calcDetails.farthestTop.toFixed(3)}) / 2 ={" "}
+                          {sensorCenter.toFixed(3)}m
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div>
+                          overallZMin = min(all hit mins) ={" "}
+                          {calcDetails.overallZMin.toFixed(3)}
+                        </div>
+                        <div>
+                          overallZMax = max(all hit maxs) ={" "}
+                          {calcDetails.overallZMax.toFixed(3)}
+                        </div>
+                        <div className="border-t border-slate-600 pt-2 text-emerald-400 font-bold text-sm">
+                          sensorCenter = (overallZMin + overallZMax) / 2 = (
+                          {calcDetails.overallZMin.toFixed(3)} +{" "}
+                          {calcDetails.overallZMax.toFixed(3)}) / 2 ={" "}
+                          {sensorCenter.toFixed(3)}m
+                        </div>
+                      </>
+                    )}
                   </pre>
                 ) : (
                   <div className="font-mono text-sm text-amber-400">
