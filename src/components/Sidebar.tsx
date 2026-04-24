@@ -205,28 +205,29 @@ export function Sidebar() {
                   </button>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-2 mb-3">
-                <div>
-                  <div className="col-span-2 mt-2">
-                    <label className="block text-[12px] text-slate-500 mb-1">
-                      Truth Center Tolerance (m)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={truck.truthTolerance ?? 0.05}
-                      onChange={(e) =>
-                        setTruckDimensions({
-                          truthTolerance: Number(e.target.value),
-                        })
-                      }
-                      className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[13px] bg-white text-slate-800"
-                    />
-                  </div>
-                </div>
-              </div>
             </div>
           )}
+
+          <div className="grid mt-3 p-4 ">
+            <div>
+              <div className="col-span-2 mt-2">
+                <label className="block text-[12px] text-slate-500 mb-1">
+                  Truth Center Tolerance (m)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={truck.truthTolerance ?? 0.05}
+                  onChange={(e) =>
+                    setTruckDimensions({
+                      truthTolerance: Number(e.target.value),
+                    })
+                  }
+                  className="w-full px-[10px] py-[6px] border border-slate-200 rounded text-[13px] bg-white text-slate-800"
+                />
+              </div>
+            </div>
+          </div>
 
           {activeTab === "Scale" && (
             <div className="p-4 border-b border-slate-200">
@@ -436,12 +437,10 @@ export function Sidebar() {
                         <button
                           onClick={() => {
                             if (newSensorData.name.trim()) {
-                              useStore
-                                .getState()
-                                .addSensorProfile({
-                                  id: `s-prof-${Date.now()}`,
-                                  ...newSensorData,
-                                });
+                              useStore.getState().addSensorProfile({
+                                id: `s-prof-${Date.now()}`,
+                                ...newSensorData,
+                              });
                               setNewSensorData({
                                 name: "",
                                 height: 2.5,
