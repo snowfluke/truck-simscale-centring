@@ -84,14 +84,14 @@ export function StatsPanel() {
 
   // Override for extreme unbalance
   if (totalHits > 0 && activeLeftCount > 0 && activeRightCount === 0) {
-    cmd = "MOVE FORWARD";
+    cmd = "STEER RIGHT";
     cmdBgClass = "bg-amber-500/90 border-l-4 border-amber-700";
     cmdTitleClass = "text-amber-200";
     cmdValueClass = "text-white";
     cmdDetailsClass = "text-amber-100";
     instruction = "Getting too close to LEFT sensors.";
   } else if (totalHits > 0 && activeRightCount > 0 && activeLeftCount === 0) {
-    cmd = "MOVE BACKWARD";
+    cmd = "STEER LEFT";
     cmdBgClass = "bg-amber-500/90 border-l-4 border-amber-700";
     cmdTitleClass = "text-amber-200";
     cmdValueClass = "text-white";
