@@ -61,10 +61,11 @@ export function StatsPanel() {
   let engineerCmd = "TRUCK OFF-CENTER";
   let engineerInstruction = `Truth Center: ${truthCenter.toFixed(2)}m`;
 
-  if (Math.abs(truthCenter) < 0.2) {
+  const tolerance = truck.truthTolerance ?? 0.05;
+  if (Math.abs(truthCenter) <= tolerance) {
     engineerStatus = "centered";
     engineerCmd = "TRUCK TRULY CENTERED";
-    engineerInstruction = `Truth Center: ${truthCenter.toFixed(2)}m (Tolerance < 0.2m)`;
+    engineerInstruction = `Truth Center: ${truthCenter.toFixed(2)}m (Tolerance \u2264 ${tolerance.toFixed(2)}m)`;
   }
 
   let engineerBgClass = "bg-red-500/95 border-l-4 border-red-700";

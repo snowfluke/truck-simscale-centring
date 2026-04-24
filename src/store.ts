@@ -125,11 +125,23 @@ interface GameState {
   setScale: (s: Partial<{ width: number; length: number }>) => void;
 
   // Truck
-  truck: { z: number; width: number; height: number; length: number };
+  truck: {
+    z: number;
+    width: number;
+    height: number;
+    length: number;
+    truthTolerance: number;
+  };
   setTruckDimensions: (
-    d: Partial<{ width: number; height: number; length: number }>,
+    d: Partial<{
+      width: number;
+      height: number;
+      length: number;
+      truthTolerance: number;
+    }>,
   ) => void;
   moveTruck: (dz: number) => void;
+  resetTruck: () => void;
   truckProfiles: TruckProfile[];
   addTruckProfile: (p: TruckProfile) => void;
 
@@ -167,12 +179,17 @@ export const useStore = create<GameState>((set, get) => ({
   scale: { width: 3, length: 16 },
   setScale: (newScale) => set((s) => ({ scale: { ...s.scale, ...newScale } })),
 
-  truck: { z: (16 / 2) * 2.0, width: 2.4, height: 2.8, length: 7 }, // Starts at 200%
+  truck: {
+    z: (16 / 2) * 2.0,
+    width: 2.4,
+    height: 2.8,
+    length: 7,
+    truthTolerance: 0.05,
+  }, // Starts at 200%
   setTruckDimensions: (d) => set((s) => ({ truck: { ...s.truck, ...d } })),
-  moveTruck: (dz) =>
-    set((s) => ({
-      truck: { ...s.truck, z: Math.round((s.truck.z + dz) * 10) / 10 },
-    })),
+  moveTruck: (dz) => set((s) => ({ truck: { ...s.truck, z: s.truck.z + dz } })),
+  resetTruck: () =>
+    set((s) => ({ truck: { ...s.truck, z: (s.scale.length / 2) * 2.0 } })),
   truckProfiles: ((): TruckProfile[] => {
     try {
       const saved = localStorage.getItem("truckProfiles");
