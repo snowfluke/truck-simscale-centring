@@ -10,11 +10,10 @@ import {
 } from "lucide-react";
 
 export function StatsPanel() {
-  const { readings, sensorCenter, truthCenter, calcDetails } =
+  const { readings, sensorCenter, truthCenter, calcDetails, activeTruck } =
     useSensorCalculations();
-  const truck = useStore((s) => s.truck);
   const scale = useStore((s) => s.scale);
-  const setTruckDimensions = useStore((s) => s.setTruckDimensions);
+  const updateActiveTruck = useStore((s) => s.updateActiveTruck);
 
   const [showCalcModal, setShowCalcModal] = useState(false);
   const [infoModal, setInfoModal] = useState<"truth" | "delta" | null>(null);
@@ -22,6 +21,9 @@ export function StatsPanel() {
   const totalHits = readings.filter((r) => r.hit).length;
   const delta =
     sensorCenter !== null ? Math.abs(truthCenter - sensorCenter) : 0;
+
+  // Use activeTruck properties for everything
+  const truck = activeTruck || useStore.getState().truck;
   const tolerance = truck.truthTolerance ?? 0.05;
 
   let trafficLight = "off";
@@ -38,19 +40,20 @@ export function StatsPanel() {
     trafficLight = "off";
   } else if (flow === "sensor_prep") {
     trafficLight = "off";
-  } else if (flow === "weighing") {
+  } else if (flow === "weighing" || flow === "weighing_complete") {
     if (sensorCenter !== null && Math.abs(sensorCenter) <= tolerance) {
       trafficLight = "green";
       cmd = "Berhenti!";
       instruction =
-        "Posisi sudah pas. Silakan tunggu proses penimbangan selesai.";
+        flow === "weighing_complete"
+          ? "Proses penimbangan selesai. Membuka palang..."
+          : "Posisi sudah pas. Silakan tunggu proses penimbangan selesai.";
     } else {
       // AI DONT CHANGE THIS!!
       trafficLight = "red";
       instruction = "Sesuaikan Posisi";
       if (sensorCenter === null) {
-        instruction =
-          "Sensor tidak mendeteksi truk. Silakan maju ke dalam jangkauan.";
+        instruction = "Sensor dimatikan.";
       } else if (sensorCenter > tolerance) {
         // AI DONT CHANGE THIS!!
         cmd = `Mundur ${Math.abs(sensorCenter).toFixed(2)}m`;
@@ -67,7 +70,7 @@ export function StatsPanel() {
     trafficLight = "off";
   }
 
-  // Handle the 3 second wait timer during 'weighing' state
+  // Handle the wait timer during 'weighing' state
   useEffect(() => {
     let timer: number;
     if (
@@ -76,11 +79,11 @@ export function StatsPanel() {
       Math.abs(sensorCenter) <= tolerance
     ) {
       timer = window.setTimeout(() => {
-        setTruckDimensions({ flowState: "exit_opening" });
-      }, 3000);
+        updateActiveTruck({ flowState: "weighing_complete" });
+      }, 2000);
     }
     return () => clearTimeout(timer);
-  }, [flow, sensorCenter, tolerance, setTruckDimensions]);
+  }, [flow, sensorCenter, tolerance, updateActiveTruck]);
 
   let cmdBgClass = "bg-slate-800/95 border-l-4 border-slate-500 text-slate-300";
   let cmdTitleClass = "text-slate-400";

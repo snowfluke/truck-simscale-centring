@@ -1,12 +1,16 @@
 import React, { useRef, useMemo } from "react";
+import { useFrame } from "@react-three/fiber";
 import {
   useStore,
   useSensorCalculations,
   raycastScene,
   getTruckTransform,
+  useActiveTruck,
 } from "../store";
 import { Grid, Text, Line, Html } from "@react-three/drei";
 import * as THREE from "three";
+
+// ... other imports ...
 
 // Fast AABB Raycasting Function for Sensor Beams extracted to store.ts
 
@@ -18,8 +22,9 @@ function buildBeamGeometry(
   beamW: number,
   truckTransform: { position: THREE.Vector3; rotation: THREE.Euler },
   truckDim: { width: number; height: number; length: number },
+  isLaser?: boolean | string,
 ) {
-  const raysCount = 16;
+  const raysCount = isLaser === "entry" ? 32 : isLaser ? 1 : 16;
   const halfAngle = ((beamW / 2) * Math.PI) / 180;
 
   let right = new THREE.Vector3().crossVectors(dir, up).normalize();
@@ -43,41 +48,81 @@ function buildBeamGeometry(
   dirs.push(dir);
 
   // Peripheral rays
-  for (let i = 0; i < raysCount; i++) {
-    const theta = (i / raysCount) * Math.PI * 2;
-    const sinHalf = Math.sin(halfAngle);
-    const cosHalf = Math.cos(halfAngle);
+  if (isLaser) {
+    if (isLaser === "entry") {
+      const fanAngle = (5 * Math.PI) / 180; // 5 degree vertical sweep
+      for (let i = 0; i < raysCount; i++) {
+        const fraction = i / (raysCount - 1);
+        const angle = -fanAngle / 2 + fraction * fanAngle;
+        const rDir = new THREE.Vector3()
+          .copy(dir)
+          .applyAxisAngle(right, angle)
+          .normalize();
 
-    const dx = Math.cos(theta) * sinHalf;
-    const dy = Math.sin(theta) * sinHalf;
-    const dz = cosHalf;
+        const hit = raycastScene(origin, rDir, maxR, truckTransform, truckDim);
+        const point = origin
+          .clone()
+          .add(rDir.clone().multiplyScalar(hit.distance));
 
-    const rDir = new THREE.Vector3()
-      .addScaledVector(right, dx)
-      .addScaledVector(realUp, dy)
-      .addScaledVector(dir, dz)
-      .normalize();
+        hitPoints.push(point);
+        distances.push(hit.distance);
+        hitNormals.push(hit.normal);
+        dirs.push(rDir);
+      }
+    }
+  } else {
+    for (let i = 0; i < raysCount; i++) {
+      const theta = (i / raysCount) * Math.PI * 2;
+      const sinHalf = Math.sin(halfAngle);
+      const cosHalf = Math.cos(halfAngle);
 
-    const hit = raycastScene(origin, rDir, maxR, truckTransform, truckDim);
-    const point = origin.clone().add(rDir.clone().multiplyScalar(hit.distance));
+      const dx = Math.cos(theta) * sinHalf;
+      const dy = Math.sin(theta) * sinHalf;
+      const dz = cosHalf;
 
-    hitPoints.push(point);
-    distances.push(hit.distance);
-    hitNormals.push(hit.normal);
-    dirs.push(rDir);
+      const rDir = new THREE.Vector3()
+        .addScaledVector(right, dx)
+        .addScaledVector(realUp, dy)
+        .addScaledVector(dir, dz)
+        .normalize();
+
+      const hit = raycastScene(origin, rDir, maxR, truckTransform, truckDim);
+      const point = origin
+        .clone()
+        .add(rDir.clone().multiplyScalar(hit.distance));
+
+      hitPoints.push(point);
+      distances.push(hit.distance);
+      hitNormals.push(hit.normal);
+      dirs.push(rDir);
+    }
   }
 
-  return { hitPoints, distances, hitNormals, dirs, raysCount, centerHit };
+  return {
+    hitPoints,
+    distances,
+    hitNormals,
+    dirs,
+    raysCount,
+    centerHit,
+    isLaser,
+  };
 }
 
 function CustomBeam({
   origin,
   hitPoints,
   raysCount,
+  isLaser,
+  color = "#ef4444",
+  opacity = 0.15,
 }: {
   origin: THREE.Vector3;
   hitPoints: THREE.Vector3[];
   raysCount: number;
+  isLaser?: boolean;
+  color?: string;
+  opacity?: number;
 }) {
   const geoRef = useRef<THREE.BufferGeometry>(null);
 
@@ -101,10 +146,17 @@ function CustomBeam({
     positions[centerHitIdx * 3 + 2] = hitPoints[0].z;
 
     const indices = [];
-    for (let i = 1; i <= raysCount; i++) {
-      const next = i === raysCount ? 1 : i + 1;
-      indices.push(0, i, next);
-      indices.push(centerHitIdx, next, i);
+    if (isLaser) {
+      // Draw fan
+      for (let i = 1; i < raysCount; i++) {
+        indices.push(0, i, i + 1);
+      }
+    } else {
+      for (let i = 1; i <= raysCount; i++) {
+        const next = i === raysCount ? 1 : i + 1;
+        indices.push(0, i, next);
+        indices.push(centerHitIdx, next, i);
+      }
     }
 
     geoRef.current.setAttribute(
@@ -113,15 +165,15 @@ function CustomBeam({
     );
     geoRef.current.setIndex(indices);
     geoRef.current.computeVertexNormals();
-  }, [origin, hitPoints, raysCount]);
+  }, [origin, hitPoints, raysCount, isLaser]);
 
   return (
     <mesh>
       <bufferGeometry ref={geoRef} />
       <meshBasicMaterial
-        color="#ef4444"
+        color={color}
         transparent
-        opacity={0.15}
+        opacity={opacity}
         depthWrite={false}
         side={THREE.DoubleSide}
       />
@@ -136,6 +188,7 @@ function ReflectedBeamMesh({
   dirs,
   raysCount,
   maxRange,
+  isLaser,
 }: {
   hitPoints: THREE.Vector3[];
   distances: number[];
@@ -143,6 +196,7 @@ function ReflectedBeamMesh({
   dirs: THREE.Vector3[];
   raysCount: number;
   maxRange: number;
+  isLaser?: boolean;
 }) {
   const geoRef = useRef<THREE.BufferGeometry>(null);
 
@@ -153,7 +207,6 @@ function ReflectedBeamMesh({
     const indices: number[] = [];
 
     const endPoints = hitPoints.map((pt, i) => {
-      // If the ray didn't hit anything closer than maxRange, it doesn't reflect
       if (distances[i] >= maxRange - 0.05) return pt.clone();
 
       const normal = hitNormals[i];
@@ -164,7 +217,6 @@ function ReflectedBeamMesh({
         .sub(normal.clone().multiplyScalar(2 * dot))
         .normalize();
 
-      // The reflection travels out as far as the maxRange.
       return pt.clone().add(rDir.multiplyScalar(maxRange));
     });
 
@@ -178,24 +230,32 @@ function ReflectedBeamMesh({
       positions.push(e.x, e.y, e.z);
     }
 
-    for (let i = 1; i <= raysCount; i++) {
-      let next = i === raysCount ? 1 : i + 1;
+    if (isLaser) {
+      // Draw reflection as fan segments
+      for (let i = 1; i < raysCount; i++) {
+        let next = i + 1;
+        let h_idx = 2 * i;
+        let e_idx = 2 * i + 1;
+        let nh_idx = 2 * next;
+        let ne_idx = 2 * next + 1;
+        indices.push(h_idx, ne_idx, e_idx);
+        indices.push(h_idx, nh_idx, ne_idx);
+      }
+    } else {
+      for (let i = 1; i <= raysCount; i++) {
+        let next = i === raysCount ? 1 : i + 1;
 
-      let h_idx = 2 * i;
-      let e_idx = 2 * i + 1;
+        let h_idx = 2 * i;
+        let e_idx = 2 * i + 1;
 
-      let nh_idx = 2 * next;
-      let ne_idx = 2 * next + 1;
+        let nh_idx = 2 * next;
+        let ne_idx = 2 * next + 1;
 
-      // Side faces
-      indices.push(h_idx, ne_idx, e_idx);
-      indices.push(h_idx, nh_idx, ne_idx);
-
-      // Cap faces
-      indices.push(e_idx, ne_idx, 1);
-
-      // Base faces
-      indices.push(h_idx, 0, nh_idx);
+        indices.push(h_idx, ne_idx, e_idx);
+        indices.push(h_idx, nh_idx, ne_idx);
+        indices.push(e_idx, ne_idx, 1);
+        indices.push(h_idx, 0, nh_idx);
+      }
     }
 
     geoRef.current.setAttribute(
@@ -204,7 +264,7 @@ function ReflectedBeamMesh({
     );
     geoRef.current.setIndex(indices);
     geoRef.current.computeVertexNormals();
-  }, [hitPoints, distances, hitNormals, dirs, raysCount, maxRange]);
+  }, [hitPoints, distances, hitNormals, dirs, raysCount, maxRange, isLaser]);
 
   return (
     <mesh>
@@ -346,10 +406,43 @@ export function Road() {
 
 export function FacilityDecorations() {
   const scale = useStore((s) => s.scale);
+  const { truthCenter, sensorCenter, activeTruck } = useSensorCalculations();
 
   // Position of cabin relative to the road/scale center
   const cabinX = -scale.width / 2 - 2.5;
   const cabinZ = 0;
+
+  // Calculate displayed weight
+  let displayedWeightText = "---";
+  let displayedWeightColor = "#64748b"; // Slate-500
+  const flow = activeTruck.flowState;
+
+  if (!["approaching", "exiting", "driving"].includes(flow)) {
+    const baseWeight =
+      activeTruck.width * activeTruck.height * activeTruck.length * 250;
+
+    const maxDist = 10.5;
+    let distFactor = 1.0 - Math.min(1.0, Math.abs(truthCenter) / maxDist);
+    let weightFactor = 0.1 + distFactor * 0.9;
+
+    const noise = Math.sin(truthCenter * 20) * (0.01 * baseWeight);
+    const tolerance = activeTruck.truthTolerance ?? 0.05;
+
+    if (["weighing", "weighing_complete", "exit_opening"].includes(flow)) {
+      if (Math.abs(truthCenter) <= tolerance) {
+        displayedWeightText = (baseWeight / 1000).toFixed(2) + " t";
+        displayedWeightColor = "#10b981"; // Emerald green
+      } else {
+        const measuredWeight = baseWeight * weightFactor + noise;
+        displayedWeightText =
+          (Math.max(0, measuredWeight) / 1000).toFixed(2) + " t";
+        displayedWeightColor = "#f43f5e"; // Rose
+      }
+    } else {
+      displayedWeightText = "WAIT";
+      displayedWeightColor = "#f59e0b"; // Amber
+    }
+  }
 
   return (
     <group>
@@ -402,6 +495,47 @@ export function FacilityDecorations() {
             roughness={0.1}
           />
         </mesh>
+
+        {/* Billboard / Weight Display */}
+        <group position={[-0.5, 4.0, 0]}>
+          {" "}
+          {/* slightly behind house center, elevated */}
+          {/* Poles */}
+          <mesh position={[0, -2, -1]}>
+            <cylinderGeometry args={[0.08, 0.08, 4]} />
+            <meshStandardMaterial color="#334155" />
+          </mesh>
+          <mesh position={[0, -2, 1]}>
+            <cylinderGeometry args={[0.08, 0.08, 4]} />
+            <meshStandardMaterial color="#334155" />
+          </mesh>
+          {/* Screen */}
+          <mesh position={[0, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
+            <boxGeometry args={[4, 2, 0.2]} />
+            <meshStandardMaterial color="#020617" />
+          </mesh>
+          {/* Text displayed on the screen */}
+          <Text
+            position={[0.11, 0.2, 0]}
+            rotation={[0, Math.PI / 2, 0]}
+            color={displayedWeightColor}
+            fontSize={0.8}
+            anchorX="center"
+            anchorY="middle"
+          >
+            {displayedWeightText}
+          </Text>
+          <Text
+            position={[0.11, -0.6, 0]}
+            rotation={[0, Math.PI / 2, 0]}
+            color="#475569"
+            fontSize={0.2}
+            anchorX="center"
+            anchorY="middle"
+          >
+            MEASURED WEIGHT
+          </Text>
+        </group>
       </group>
 
       {/* Main Canopy over the road/scale */}
@@ -511,10 +645,76 @@ function Wheel({ x, y, z }: { x: number; y: number; z: number }) {
   );
 }
 
-export function Truck() {
-  const truck = useStore((s) => s.truck);
+export function DeadTrucks() {
+  const deadTrucks = useStore((s) => s.deadTrucks);
+  if (!deadTrucks) return null;
+  return (
+    <group>
+      {deadTrucks.map((t) => (
+        <Truck
+          key={t.id}
+          config={t.config}
+          overrideTransform={{ position: t.pos, rotation: t.rot }}
+        />
+      ))}
+    </group>
+  );
+}
+
+export function Trucks() {
+  const trucks = useStore((s) => s.trucks);
+  if (!trucks) return null;
+  return (
+    <group>
+      {trucks.map((t) => (
+        <Truck key={t.id} config={t} />
+      ))}
+    </group>
+  );
+}
+
+function TruckLogos({ url, width, cargoHeight, cargoLength, pos }: any) {
+  const [tex, setTex] = React.useState<THREE.Texture | null>(null);
+  React.useEffect(() => {
+    if (!url) return;
+    new THREE.TextureLoader().load(url, (t) => setTex(t));
+  }, [url]);
+
+  if (!tex) return null;
+  const size = Math.min(cargoHeight, cargoLength) * 0.8;
+  return (
+    <group position={pos}>
+      <mesh
+        position={[-width / 2 - 0.01, 0, 0]}
+        rotation={[0, -Math.PI / 2, 0]}
+      >
+        <planeGeometry args={[cargoLength * 0.9, size]} />
+        <meshBasicMaterial map={tex} transparent side={THREE.DoubleSide} />
+      </mesh>
+      <mesh position={[width / 2 + 0.01, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
+        <planeGeometry args={[cargoLength * 0.9, size]} />
+        <meshBasicMaterial map={tex} transparent side={THREE.DoubleSide} />
+      </mesh>
+    </group>
+  );
+}
+
+export function Truck({
+  config,
+  overrideTransform,
+}: {
+  config: any;
+  overrideTransform?: {
+    position: [number, number, number];
+    rotation: [number, number, number];
+  };
+}) {
   const selectedEntity = useStore((s) => s.selectedEntity);
   const setSelectedEntity = useStore((s) => s.setSelectedEntity);
+
+  const truck = config;
+  const d = truck.d;
+  const isGhost = false;
 
   // Procedural composition of truck lengths based on config
   const cabLength = Math.min(2.5, truck.length * 0.35);
@@ -531,15 +731,19 @@ export function Truck() {
   const width = truck.width;
   const xEdges = width / 2 - 0.2;
 
-  const tform = getTruckTransform(truck.d);
+  const bypass = truck.hasBox === false;
+  const tform = getTruckTransform(d);
 
   return (
     <group
-      position={tform.position}
-      rotation={tform.rotation}
+      position={overrideTransform ? overrideTransform.position : tform.position}
+      rotation={overrideTransform ? overrideTransform.rotation : tform.rotation}
       onClick={(e) => {
+        if (isGhost) return;
         e.stopPropagation();
-        setSelectedEntity(selectedEntity === "truck" ? null : "truck");
+        setSelectedEntity(
+          selectedEntity === `truck-${truck.id}` ? null : `truck-${truck.id}`,
+        );
       }}
     >
       {/* Body Elevated over clearance */}
@@ -574,18 +778,39 @@ export function Truck() {
         </mesh>
 
         {/* Cargo Payload Box */}
-        <mesh
-          position={[
-            0,
-            chassisHeight / 2 + cargoHeight / 2,
-            -truck.length / 2 + cabLength + cargoLength / 2,
-          ]}
-        >
-          <boxGeometry args={[width, cargoHeight, cargoLength * 0.98]} />
-          <meshStandardMaterial color="#f8fafc" />
-        </mesh>
+        {!bypass && (
+          <>
+            <mesh
+              position={[
+                0,
+                chassisHeight / 2 + cargoHeight / 2,
+                -truck.length / 2 + cabLength + cargoLength / 2,
+              ]}
+            >
+              <boxGeometry args={[width, cargoHeight, cargoLength * 0.98]} />
+              <meshStandardMaterial
+                color={isGhost ? "#e2e8f0" : "#f8fafc"}
+                transparent={isGhost}
+                opacity={isGhost ? 0.9 : 1}
+              />
+            </mesh>
+            {truck.logoUrl && !isGhost && (
+              <TruckLogos
+                url={truck.logoUrl}
+                width={width}
+                cargoHeight={cargoHeight}
+                cargoLength={cargoLength}
+                pos={[
+                  0,
+                  chassisHeight / 2 + cargoHeight / 2,
+                  -truck.length / 2 + cabLength + cargoLength / 2,
+                ]}
+              />
+            )}
+          </>
+        )}
 
-        {selectedEntity === "truck" && (
+        {selectedEntity === `truck-${truck.id}` && !isGhost && (
           <Html
             position={[width / 2 + 1, chassisHeight / 2 + cargoHeight / 2, 0]}
             center
@@ -610,16 +835,40 @@ export function Truck() {
       </group>
 
       {/* Wheels */}
-      <Wheel x={xEdges} y={wheelRadius} z={-truck.length / 2 + 1.2} />
-      <Wheel x={-xEdges} y={wheelRadius} z={-truck.length / 2 + 1.2} />
+      <Wheel
+        x={xEdges}
+        y={wheelRadius}
+        z={-truck.length / 2 + Math.min(1.2, truck.length * 0.2)}
+      />
+      <Wheel
+        x={-xEdges}
+        y={wheelRadius}
+        z={-truck.length / 2 + Math.min(1.2, truck.length * 0.2)}
+      />
 
-      <Wheel x={xEdges} y={wheelRadius} z={truck.length / 2 - 1.5} />
-      <Wheel x={-xEdges} y={wheelRadius} z={truck.length / 2 - 1.5} />
+      <Wheel
+        x={xEdges}
+        y={wheelRadius}
+        z={truck.length / 2 - Math.min(1.5, truck.length * 0.25)}
+      />
+      <Wheel
+        x={-xEdges}
+        y={wheelRadius}
+        z={truck.length / 2 - Math.min(1.5, truck.length * 0.25)}
+      />
 
       {truck.length > 6 && (
         <>
-          <Wheel x={xEdges} y={wheelRadius} z={truck.length / 2 - 2.5} />
-          <Wheel x={-xEdges} y={wheelRadius} z={truck.length / 2 - 2.5} />
+          <Wheel
+            x={xEdges}
+            y={wheelRadius}
+            z={truck.length / 2 - Math.min(2.5, truck.length * 0.25) - 1.0}
+          />
+          <Wheel
+            x={-xEdges}
+            y={wheelRadius}
+            z={truck.length / 2 - Math.min(2.5, truck.length * 0.25) - 1.0}
+          />
         </>
       )}
       {truck.length >= 12 && (
@@ -690,6 +939,7 @@ function SensorPole({
   tiltHorizontal,
   placement,
   maxRange,
+  isOpenOverride,
 }: {
   id: string;
   type?: "laser" | "sonar";
@@ -701,11 +951,12 @@ function SensorPole({
   tiltHorizontal: number;
   placement: "left" | "right" | "center";
   maxRange?: number;
+  isOpenOverride?: boolean;
 }) {
   const scale = useStore((s) => s.scale);
   const selectedEntity = useStore((s) => s.selectedEntity);
   const setSelectedEntity = useStore((s) => s.setSelectedEntity);
-  const truck = useStore((s) => s.truck);
+  const truck = useActiveTruck();
 
   const xOffset = placement === "center" ? 0 : scale.width / 2 + 0.3;
   const xDir = placement === "left" ? -1 : placement === "center" ? 0 : 1;
@@ -730,40 +981,37 @@ function SensorPole({
       : dirXBase * Math.cos(tiltVRads) * Math.sin(tiltHRads);
   const dirY = -Math.sin(tiltVRads);
 
-  const flowState = useStore((s) => s.truck.flowState);
+  const flowState = truck.flowState;
 
   const isEntry = z === -10.5;
   const isExit = z === 10.5;
   const isOpen =
     placement === "center"
-      ? isEntry
-        ? ["entry_opening", "entering"].includes(flowState)
-        : isExit
-          ? ["exit_opening", "exiting"].includes(flowState)
-          : false
+      ? isOpenOverride !== undefined
+        ? isOpenOverride
+        : isEntry
+          ? ["entry_opening", "entering"].includes(flowState)
+          : isExit
+            ? ["exit_opening", "exit_holding", "exiting"].includes(flowState)
+            : false
       : false;
   const targetAngle = isOpen ? Math.PI / 2 : 0;
   const [angle, setAngle] = React.useState(targetAngle);
 
-  React.useEffect(() => {
-    let animationFrame: number;
-    const animate = () => {
-      setAngle((curr) => {
-        const diff = targetAngle - curr;
-        if (Math.abs(diff) < 0.01) return targetAngle;
-        return curr + diff * 0.1;
-      });
-      animationFrame = requestAnimationFrame(animate);
-    };
-    animate();
-    return () => cancelAnimationFrame(animationFrame);
-  }, [targetAngle]);
+  useFrame((state, delta) => {
+    setAngle((curr) => {
+      const diff = targetAngle - curr;
+      if (Math.abs(diff) < 0.001) return targetAngle;
+      return curr + diff * (delta * 10);
+    });
+  });
 
   const tform = getTruckTransform(truck.d);
   const truckDim = {
     width: truck.width,
     height: truck.height,
     length: truck.length,
+    hasBox: truck.hasBox,
   };
 
   const truckMin = useMemo(
@@ -806,6 +1054,11 @@ function SensorPole({
   const worldUp = useMemo(() => new THREE.Vector3(0, 1, 0), []);
 
   const isLaser = type === "laser";
+  const laserType = isLaser
+    ? id === "s-entry-laser"
+      ? "entry"
+      : "exit"
+    : false;
   const isLaserActive = isLaser ? flowState === "weighing" : true;
 
   const effectiveMR = isLaserActive ? mR : 0;
@@ -820,8 +1073,18 @@ function SensorPole({
         beamWidth,
         tform,
         truckDim,
+        laserType,
       ),
-    [origin, worldDir, worldUp, effectiveMR, beamWidth, tform, truckDim],
+    [
+      origin,
+      worldDir,
+      worldUp,
+      effectiveMR,
+      beamWidth,
+      tform,
+      truckDim,
+      laserType,
+    ],
   );
 
   return (
@@ -879,7 +1142,7 @@ function SensorPole({
       {/* World-space aligned beam and reflections */}
       {isLaserActive && (
         <group position={[-posX, 0, -z]}>
-          {isLaser ? (
+          {laserType === "exit" ? (
             <>
               <Line
                 points={[
@@ -893,7 +1156,6 @@ function SensorPole({
                 color="#ef4444"
                 lineWidth={2}
               />
-              {/* Reflection point */}
               <mesh
                 position={[
                   beamData.hitPoints[0].x,
@@ -904,6 +1166,17 @@ function SensorPole({
                 <sphereGeometry args={[0.05, 8, 8]} />
                 <meshBasicMaterial color="#ef4444" />
               </mesh>
+            </>
+          ) : laserType === "entry" ? (
+            <>
+              <CustomBeam
+                origin={origin}
+                hitPoints={beamData.hitPoints}
+                raysCount={beamData.raysCount}
+                isLaser={true}
+                color="#b45309"
+                opacity={0.4}
+              />
             </>
           ) : (
             <>
@@ -967,19 +1240,13 @@ export function CrossbarGate({
   const [angle, setAngle] = React.useState(targetAngle);
 
   // Smooth animate the angle
-  React.useEffect(() => {
-    let animationFrame: number;
-    const animate = () => {
-      setAngle((curr) => {
-        const diff = targetAngle - curr;
-        if (Math.abs(diff) < 0.01) return targetAngle;
-        return curr + diff * 0.1;
-      });
-      animationFrame = requestAnimationFrame(animate);
-    };
-    animate();
-    return () => cancelAnimationFrame(animationFrame);
-  }, [targetAngle]);
+  useFrame((state, delta) => {
+    setAngle((curr) => {
+      const diff = targetAngle - curr;
+      if (Math.abs(diff) < 0.001) return targetAngle;
+      return curr + diff * (delta * 10);
+    });
+  });
 
   const pivotDir = reverse ? 1 : -1;
 
@@ -1008,7 +1275,9 @@ export function CrossbarGate({
 }
 
 function FacilityExitGates() {
-  const d = useStore((s) => s.truck.d);
+  const trucks = useStore((s) => s.trucks);
+  if (!trucks || trucks.length === 0) return null;
+
   const straightL = 60;
   const curveL = Math.PI * 10;
   const startD = straightL + curveL; // 91.41
@@ -1017,36 +1286,69 @@ function FacilityExitGates() {
   const dAtFirstGate = startD + 30 - 10.5; // reaches first gate
   const dAtSecondGate = startD + 30 + 10.5; // reaches second gate
 
-  const openFirst = d > dAtFirstGate - 10 && d < dAtFirstGate + 15;
-  const openSecond = d > dAtSecondGate - 10 && d < dAtSecondGate + 15;
+  let openFirst = false;
+  let openSecond = false;
+
+  for (const t of trucks) {
+    if (t.d > dAtFirstGate - 10 && t.d < dAtFirstGate + 15) openFirst = true;
+    if (t.d > dAtSecondGate - 10 && t.d < dAtSecondGate + 15) openSecond = true;
+  }
 
   return (
     <group position={[-20, 0, 0]} rotation={[0, 0, 0]}>
       <CrossbarGate z={10.5} isOpen={openFirst} reverse={true} />
       <CrossbarGate z={-10.5} isOpen={openSecond} reverse={true} />
+
+      {/* Goodbye Billboard */}
+      <group position={[0, 4.0, -10.5]}>
+        <mesh position={[0, 0, 0.1]}>
+          <boxGeometry args={[7, 1.5, 0.2]} />
+          <meshStandardMaterial color="#0f172a" />
+        </mesh>
+        <Text
+          position={[0, 0, 0.21]}
+          fontSize={0.8}
+          color="#f8fafc"
+          anchorX="center"
+          anchorY="middle"
+          fontWeight="bold"
+        >
+          GOODBYE
+        </Text>
+      </group>
     </group>
   );
 }
 
 export function Sensors() {
-  const { readings: sensors } = useSensorCalculations();
+  const { readings: sensors, activeTruck } = useSensorCalculations();
   const scale = useStore((s) => s.scale);
   const selectedEntity = useStore((s) => s.selectedEntity);
-  const state = useStore((s) => s.truck.flowState);
+  const trucks = useStore((s) => s.trucks) || [activeTruck];
+
+  // A truck needs the entry gate open if its front is very close to it (-11.5) up to when its rear passes it (-10.5)
+  // We use the flowState or z-position:
+  let entryOpen = false;
+  let exitOpen = false;
+
+  for (const t of trucks) {
+    if (["entry_opening", "entering"].includes(t.flowState)) entryOpen = true;
+    if (["exit_opening", "exit_holding", "exiting"].includes(t.flowState)) {
+      exitOpen = true;
+    } else {
+      // If a truck is physically under the exit gate, force it open
+      const tFront = -30 + t.d + t.length / 2;
+      const tRear = -30 + t.d - t.length / 2;
+      if (tFront > 9.0 && tRear < 11.5) exitOpen = true;
+      if (tFront > -11.5 && tRear < -10.3) entryOpen = true; // Extra safety for entry
+    }
+  }
 
   return (
     <group>
       {/* Entry Gate with 2 Crossbars */}
-      <CrossbarGate
-        z={-10.5}
-        isOpen={["entry_opening", "entering"].includes(state)}
-        reverse={false}
-      />
-      <CrossbarGate
-        z={10.5}
-        isOpen={["exit_opening", "exiting"].includes(state)}
-        reverse={false}
-      />
+      <CrossbarGate z={-10.5} isOpen={entryOpen} reverse={false} />
+      <CrossbarGate z={10.5} isOpen={exitOpen} reverse={false} />
 
       <FacilityExitGates />
 
@@ -1119,10 +1421,57 @@ export function Sensors() {
               tiltHorizontal={tH}
               placement={sens.placement as any}
               maxRange={sens.maxRange}
+              isOpenOverride={
+                sens.z === -10.5
+                  ? entryOpen
+                  : sens.z === 10.5
+                    ? exitOpen
+                    : undefined
+              }
             />
           </group>
         );
       })}
+    </group>
+  );
+}
+
+function ExplosionParticles({ x, y, z }: { x: number; y: number; z: number }) {
+  const [scale, setScale] = React.useState(0.1);
+  const [opacity, setOpacity] = React.useState(0.8);
+
+  useFrame((state, delta) => {
+    setScale((s) => s + delta * 15);
+    setOpacity((o) => Math.max(0, o - delta * 0.5));
+  });
+
+  if (opacity <= 0) return null;
+
+  return (
+    <group position={[x, y, z]}>
+      <mesh scale={[scale, scale, scale]}>
+        <sphereGeometry args={[0.5, 16, 16]} />
+        <meshBasicMaterial color="#ef4444" transparent opacity={opacity} />
+      </mesh>
+      <mesh scale={[scale * 0.8, scale * 0.8, scale * 0.8]}>
+        <sphereGeometry args={[0.5, 16, 16]} />
+        <meshBasicMaterial
+          color="#eab308"
+          transparent
+          opacity={opacity * 1.2}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+export function Explosions() {
+  const explosions = useStore((s) => s.explosions);
+  return (
+    <group>
+      {explosions.map((e) => (
+        <ExplosionParticles key={e.id} x={e.x} y={e.y} z={e.z} />
+      ))}
     </group>
   );
 }

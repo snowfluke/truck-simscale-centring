@@ -4,6 +4,7 @@ export interface TruckProfile {
   width: number;
   height: number;
   length: number;
+  hasBox?: boolean;
 }
 
 export interface SensorProfile {
