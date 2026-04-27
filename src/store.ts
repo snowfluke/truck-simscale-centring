@@ -2,12 +2,56 @@ import * as THREE from "three";
 import { create } from "zustand";
 import { SensorItem, SensorProfile, TruckProfile } from "./types";
 
+export function getTruckTransform(d: number) {
+  const straightL = 60;
+  const radius = 10;
+  const curveL = Math.PI * radius;
+  const totalL = straightL * 2 + curveL * 2;
+  d = ((d % totalL) + totalL) % totalL;
+
+  if (d < straightL) {
+    return {
+      position: new THREE.Vector3(0, 0, -straightL / 2 + d),
+      rotation: new THREE.Euler(0, Math.PI, 0),
+    };
+  } else if (d < straightL + curveL) {
+    const a = ((d - straightL) / curveL) * Math.PI;
+    return {
+      position: new THREE.Vector3(
+        -radius + radius * Math.cos(a),
+        0,
+        straightL / 2 + radius * Math.sin(a),
+      ),
+      rotation: new THREE.Euler(0, Math.PI - a, 0),
+    };
+  } else if (d < straightL * 2 + curveL) {
+    return {
+      position: new THREE.Vector3(
+        -radius * 2,
+        0,
+        straightL / 2 - (d - straightL - curveL),
+      ),
+      rotation: new THREE.Euler(0, 0, 0),
+    };
+  } else {
+    const a = ((d - straightL * 2 - curveL) / curveL) * Math.PI;
+    return {
+      position: new THREE.Vector3(
+        -radius - radius * Math.cos(a),
+        0,
+        -straightL / 2 - radius * Math.sin(a),
+      ),
+      rotation: new THREE.Euler(0, -a, 0),
+    };
+  }
+}
+
 export function raycastScene(
   origin: THREE.Vector3,
   dir: THREE.Vector3,
   maxR: number,
-  truckMin: THREE.Vector3,
-  truckMax: THREE.Vector3,
+  truckTransform: { position: THREE.Vector3; rotation: THREE.Euler },
+  truckDim: { width: number; height: number; length: number },
 ) {
   let closestT = maxR;
   let closestNormal: THREE.Vector3 | null = null;
@@ -23,12 +67,33 @@ export function raycastScene(
     }
   }
 
+  // Transform ray to truck local space
+  const matrix = new THREE.Matrix4()
+    .makeRotationFromEuler(truckTransform.rotation)
+    .setPosition(truckTransform.position);
+  const inverseMatrix = new THREE.Matrix4().copy(matrix).invert();
+
+  const localOrigin = origin.clone().applyMatrix4(inverseMatrix);
+  // Direction is a vector, we extract rotation matrix
+  const localDir = dir.clone().transformDirection(inverseMatrix);
+
+  const truckMin = new THREE.Vector3(
+    -truckDim.width / 2,
+    0,
+    -truckDim.length / 2,
+  );
+  const truckMax = new THREE.Vector3(
+    truckDim.width / 2,
+    truckDim.height,
+    truckDim.length / 2,
+  );
   const truckBox = new THREE.Box3(truckMin, truckMax);
-  const ray = new THREE.Ray(origin, dir);
+
+  const localRay = new THREE.Ray(localOrigin, localDir);
   const hitTarget = new THREE.Vector3();
 
-  if (ray.intersectBox(truckBox, hitTarget)) {
-    const dist = origin.distanceTo(hitTarget);
+  if (localRay.intersectBox(truckBox, hitTarget)) {
+    const dist = localOrigin.distanceTo(hitTarget);
     if (dist >= 0.0 && dist < closestT) {
       closestT = dist;
       hitType = "truck";
@@ -46,6 +111,9 @@ export function raycastScene(
         closestNormal.set(0, 0, -1);
       else if (Math.abs(hitTarget.z - truckMax.z) < epsilon)
         closestNormal.set(0, 0, 1);
+
+      // Transform normal back to world space
+      closestNormal.transformDirection(matrix).normalize();
     }
   }
 
@@ -84,14 +152,6 @@ export const DEFAULT_TRUCK_PROFILES: TruckProfile[] = [
     width: 2.5,
     height: 3.0,
   },
-  {
-    id: "kontainer",
-    name: "Truk Kontainer",
-    length: 16,
-    width: 2.5,
-    height: 4.0,
-  },
-  { id: "gandeng", name: "Truk Gandeng", length: 20, width: 2.5, height: 3.5 },
 ];
 
 export const DEFAULT_SENSOR_PROFILES: SensorProfile[] = [
@@ -105,11 +165,11 @@ export const DEFAULT_SENSOR_PROFILES: SensorProfile[] = [
     maxRange: 4.5,
   },
   {
-    id: "high-tilt",
-    name: "High 6m Tilted",
-    height: 6,
-    beamWidth: 10,
-    tiltVertical: 25,
+    id: "laser-sensor",
+    name: "Laser Beam",
+    height: 1.0,
+    beamWidth: 2,
+    tiltVertical: 0,
     tiltHorizontal: 0,
     maxRange: 10,
   },
@@ -126,18 +186,41 @@ interface GameState {
 
   // Truck
   truck: {
-    z: number;
+    d: number;
     width: number;
     height: number;
     length: number;
     truthTolerance: number;
+    selectedProfileId: string;
+    flowState:
+      | "approaching"
+      | "entry_opening"
+      | "entering"
+      | "sensor_prep"
+      | "weighing"
+      | "weighing_complete"
+      | "exit_opening"
+      | "exiting"
+      | "driving";
   };
   setTruckDimensions: (
     d: Partial<{
+      d: number;
       width: number;
       height: number;
       length: number;
       truthTolerance: number;
+      selectedProfileId: string;
+      flowState:
+        | "approaching"
+        | "entry_opening"
+        | "entering"
+        | "sensor_prep"
+        | "weighing"
+        | "weighing_complete"
+        | "exit_opening"
+        | "exiting"
+        | "driving";
     }>,
   ) => void;
   moveTruck: (dz: number) => void;
@@ -180,20 +263,24 @@ export const useStore = create<GameState>((set, get) => ({
   setScale: (newScale) => set((s) => ({ scale: { ...s.scale, ...newScale } })),
 
   truck: {
-    z: (16 / 2) * 2.0,
+    d: 5,
     width: 2.4,
     height: 2.8,
     length: 7,
     truthTolerance: 0.05,
-  }, // Starts at 200%
+    selectedProfileId: "fuso",
+    flowState: "approaching",
+  },
   setTruckDimensions: (d) => set((s) => ({ truck: { ...s.truck, ...d } })),
-  moveTruck: (dz) => set((s) => ({ truck: { ...s.truck, z: s.truck.z + dz } })),
+  moveTruck: (dz) => set((s) => ({ truck: { ...s.truck, d: s.truck.d + dz } })),
   resetTruck: () =>
-    set((s) => ({ truck: { ...s.truck, z: (s.scale.length / 2) * 2.0 } })),
+    set((s) => ({ truck: { ...s.truck, d: 5, flowState: "approaching" } })),
   truckProfiles: ((): TruckProfile[] => {
     try {
       const saved = localStorage.getItem("truckProfiles");
-      return saved ? JSON.parse(saved) : DEFAULT_TRUCK_PROFILES;
+      return saved && saved !== "undefined"
+        ? JSON.parse(saved)
+        : DEFAULT_TRUCK_PROFILES;
     } catch {
       return DEFAULT_TRUCK_PROFILES;
     }
@@ -207,76 +294,36 @@ export const useStore = create<GameState>((set, get) => ({
 
   sensors: [
     {
-      id: "s-t-l",
-      name: "Top Left",
-      z: -6,
-      height: 2.5,
-      beamWidth: 50,
+      id: "s-exit-laser",
+      type: "laser",
+      name: "Exit Laser",
+      z: 10.5,
+      height: 1.0,
+      beamWidth: 2,
       tiltVertical: 0,
-      tiltHorizontal: 0,
-      maxRange: 4.5,
-      placement: "left",
+      tiltHorizontal: 180,
+      maxRange: 15,
+      placement: "center",
     },
     {
-      id: "s-t-r",
-      name: "Top Right",
-      z: -6,
-      height: 2.5,
-      beamWidth: 50,
+      id: "s-entry-laser",
+      type: "laser",
+      name: "Entry Laser",
+      z: -10.5,
+      height: 1.0,
+      beamWidth: 2,
       tiltVertical: 0,
       tiltHorizontal: 0,
-      maxRange: 4.5,
-      placement: "right",
+      maxRange: 15,
+      placement: "center",
     },
-    {
-      id: "s-m-l",
-      name: "Mid Left",
-      z: 0,
-      height: 2.5,
-      beamWidth: 50,
-      tiltVertical: 0,
-      tiltHorizontal: 0,
-      maxRange: 4.5,
-      placement: "left",
-    },
-    {
-      id: "s-m-r",
-      name: "Mid Right",
-      z: 0,
-      height: 2.5,
-      beamWidth: 50,
-      tiltVertical: 0,
-      tiltHorizontal: 0,
-      maxRange: 4.5,
-      placement: "right",
-    },
-    {
-      id: "s-b-l",
-      name: "Bottom Left",
-      z: 6,
-      height: 2.5,
-      beamWidth: 50,
-      tiltVertical: 0,
-      tiltHorizontal: 0,
-      maxRange: 4.5,
-      placement: "left",
-    },
-    {
-      id: "s-b-r",
-      name: "Bottom Right",
-      z: 6,
-      height: 2.5,
-      beamWidth: 50,
-      tiltVertical: 0,
-      tiltHorizontal: 0,
-      maxRange: 4.5,
-      placement: "right",
-    },
-  ],
+  ] as SensorItem[],
   sensorProfiles: ((): SensorProfile[] => {
     try {
       const saved = localStorage.getItem("sensorProfiles");
-      return saved ? JSON.parse(saved) : DEFAULT_SENSOR_PROFILES;
+      return saved && saved !== "undefined"
+        ? JSON.parse(saved)
+        : DEFAULT_SENSOR_PROFILES;
     } catch {
       return DEFAULT_SENSOR_PROFILES;
     }
@@ -335,7 +382,7 @@ export const useStore = create<GameState>((set, get) => ({
   loadWorldConfig: () => {
     try {
       const saved = localStorage.getItem("worldConfig");
-      if (saved) {
+      if (saved && saved !== "undefined") {
         const data = JSON.parse(saved);
         if (data.road) get().setRoad(data.road);
         if (data.scale) get().setScale(data.scale);
@@ -386,8 +433,17 @@ export function useSensorCalculations() {
   const sensors = useStore((s) => s.sensors);
   const scale = useStore((s) => s.scale);
 
-  const truckZMin = truck.z - truck.length / 2;
-  const truckZMax = truck.z + truck.length / 2;
+  const tform = getTruckTransform(truck.d);
+  // Z equivalent is just the world position Z, roughly.
+  // Wait! The user considers Truth Center as the "deviation from z=0". Look at StatsPanel.tsx:
+  // "Truth Center Z: truthCenter.toFixed(2)"
+  const truthCenter = tform.position.z;
+
+  const truckDim = {
+    width: truck.width,
+    height: truck.height,
+    length: truck.length,
+  };
 
   let overallZMin = Infinity;
   let overallZMax = -Infinity;
@@ -395,27 +451,41 @@ export function useSensorCalculations() {
   const debugSensors: any[] = [];
 
   const readings = sensors.map((s) => {
-    // Backward compatibility for saved profiles
     const tiltV = s.tiltVertical ?? (s as any).tilt ?? 0;
     const tiltH = s.tiltHorizontal ?? 0;
     const beamW = s.beamWidth ?? 50;
     const maxR = s.maxRange || 4.5;
+    const isLaser = s.type === "laser";
 
     const tiltVRads = (tiltV * Math.PI) / 180;
     const tiltHRads = (tiltH * Math.PI) / 180;
 
-    const poleX = (scale.width / 2 + 0.3) * (s.placement === "left" ? -1 : 1);
+    const poleX =
+      s.placement === "center"
+        ? 0
+        : (scale.width / 2 + 0.3) * (s.placement === "left" ? -1 : 1);
 
-    // Direction vectors
-    const xDir = s.placement === "left" ? 1 : -1;
-    const dirX = xDir * Math.cos(tiltVRads) * Math.cos(tiltHRads);
-    const dirZ = xDir * Math.cos(tiltVRads) * Math.sin(tiltHRads);
-    // Note: y is down
+    const xDir = s.placement === "left" ? 1 : s.placement === "center" ? 0 : -1;
+    const zDirBase =
+      s.placement === "center" && tiltH === 0
+        ? 1
+        : s.placement === "center" && tiltH === 180
+          ? -1
+          : 0;
+
+    // For general direction
+    const dirX =
+      s.placement === "center"
+        ? 0
+        : xDir * Math.cos(tiltVRads) * Math.cos(tiltHRads);
+    const dirZ =
+      s.placement === "center"
+        ? (s.tiltHorizontal === 180 ? -1 : 1) * Math.cos(tiltVRads)
+        : xDir * Math.cos(tiltVRads) * Math.sin(tiltHRads);
     const dirY = -Math.sin(tiltVRads);
 
     let hit = false;
     let distance = Infinity;
-    let dx = Math.abs(poleX) - truck.width / 2;
     let overallZMinLocal = Infinity;
     let overallZMaxLocal = -Infinity;
 
@@ -423,68 +493,61 @@ export function useSensorCalculations() {
     const dir = new THREE.Vector3(dirX, dirY, dirZ).normalize();
     const up = new THREE.Vector3(0, 1, 0);
 
-    const minX = -truck.width / 2;
-    const maxX = truck.width / 2;
-    const minY = 0;
-    const maxY = truck.height;
-    const truckMin = new THREE.Vector3(minX, minY, truckZMin);
-    const truckMax = new THREE.Vector3(maxX, maxY, truckZMax);
+    const isLaserActive = isLaser ? truck.flowState === "weighing" : true;
 
     let right = new THREE.Vector3().crossVectors(dir, up).normalize();
     if (right.lengthSq() < 0.001) right = new THREE.Vector3(1, 0, 0);
     const realUp = new THREE.Vector3().crossVectors(right, dir).normalize();
 
     const halfAngle = ((beamW / 2) * Math.PI) / 180;
-    const raysCount = 32;
+    const raysCount = isLaser ? 1 : 32;
+    let effectiveMaxR = isLaser && !isLaserActive ? 0 : maxR;
     const testDirs = [dir];
-    for (let i = 0; i < raysCount; i++) {
-      const theta = (i / raysCount) * Math.PI * 2;
-      const sinHalf = Math.sin(halfAngle);
-      const cosHalf = Math.cos(halfAngle);
-
-      const d_x = Math.cos(theta) * sinHalf;
-      const d_y = Math.sin(theta) * sinHalf;
-      const d_z = cosHalf;
-
-      const rDir = new THREE.Vector3()
-        .addScaledVector(right, d_x)
-        .addScaledVector(realUp, d_y)
-        .addScaledVector(dir, d_z)
-        .normalize();
-      testDirs.push(rDir);
-    }
-
     let hitNormalVec: THREE.Vector3 | null = null;
 
-    for (const testDir of testDirs) {
-      const d = testDir.clone();
-      const res = raycastScene(origin, d, maxR, truckMin, truckMax);
+    if (isLaserActive) {
+      if (!isLaser) {
+        for (let i = 0; i < raysCount; i++) {
+          const theta = (i / raysCount) * Math.PI * 2;
+          const sinHalf = Math.sin(halfAngle);
+          const cosHalf = Math.cos(halfAngle);
 
-      // Only detecting truck for the UI calculation. Floor hits don't count as vehicle detection!
-      if (res.hitType === "truck") {
-        // SOUND REFLECTION LOGIC:
-        // The sound reflects off the surface. A specular reflection creates a cone
-        // bouncing away. We check if the sensor's origin is within this reflected cone.
-        const rDir = d
-          .clone()
-          .sub(res.normal.clone().multiplyScalar(2 * d.dot(res.normal)))
-          .normalize();
-        const toSensor = d.clone().negate();
-        const bounceAngle = rDir.angleTo(toSensor);
+          const d_x = Math.cos(theta) * sinHalf;
+          const d_y = Math.sin(theta) * sinHalf;
+          const d_z = cosHalf;
 
-        // Realistically, the signal must bounce back and hit the physical geometry of the sensor origin.
-        // We restrict the acceptance angle tightly.
-        if (bounceAngle <= halfAngle * 0.9) {
-          hit = true;
-          distance = Math.min(distance, res.distance);
+          const rDir = new THREE.Vector3()
+            .addScaledVector(right, d_x)
+            .addScaledVector(realUp, d_y)
+            .addScaledVector(dir, d_z)
+            .normalize();
+          testDirs.push(rDir);
+        }
+      }
 
-          const hitPt = origin.clone().add(d.multiplyScalar(res.distance));
-          overallZMinLocal = Math.min(overallZMinLocal, hitPt.z);
-          overallZMaxLocal = Math.max(overallZMaxLocal, hitPt.z);
+      for (const testDir of testDirs) {
+        const d = testDir.clone();
+        const res = raycastScene(origin, d, effectiveMaxR, tform, truckDim);
 
-          if (testDir === dir) {
-            // if the center ray hits, save its normal for debugging
-            hitNormalVec = res.normal;
+        if (res.hitType === "truck") {
+          const rDir = d
+            .clone()
+            .sub(res.normal.clone().multiplyScalar(2 * d.dot(res.normal)))
+            .normalize();
+          const toSensor = d.clone().negate();
+          const bounceAngle = rDir.angleTo(toSensor);
+
+          if (isLaser || bounceAngle <= halfAngle * 0.9) {
+            hit = true;
+            distance = Math.min(distance, res.distance);
+
+            const hitPt = origin.clone().add(d.multiplyScalar(res.distance));
+            overallZMinLocal = Math.min(overallZMinLocal, hitPt.z);
+            overallZMaxLocal = Math.max(overallZMaxLocal, hitPt.z);
+
+            if (testDir === dir) {
+              hitNormalVec = res.normal;
+            }
           }
         }
       }
@@ -515,9 +578,9 @@ export function useSensorCalculations() {
       tiltVertical: tiltV,
       tiltHorizontal: tiltH,
       beamWidth: beamW,
-      maxRange: maxR,
+      maxRange: effectiveMaxR,
       poleX,
-      dx,
+      dx: 0,
       t,
       hitY,
       hitZ,
@@ -535,43 +598,39 @@ export function useSensorCalculations() {
       distance,
       hitNormal: hitNormalArr,
       dir: [dirX, dirY, dirZ],
+      effectiveMaxR,
+      isActive: isLaser ? isLaserActive : true,
     };
   });
 
   let sensorCenter = null;
-  const topHits = readings.filter((r) => r.hit && r.z < 0);
-  const bottomHits = readings.filter((r) => r.hit && r.z >= 0);
+  let hasLaserHits = false;
+  let entryDist = 0;
+  let exitDist = 0;
 
-  let farthestTop = 0;
-  let farthestBottom = 0;
+  const entryLaser = readings.find((r) => r.id === "s-entry-laser");
+  const exitLaser = readings.find((r) => r.id === "s-exit-laser");
 
-  if (topHits.length > 0) {
-    farthestTop = Math.max(...topHits.map((r) => Math.abs(r.z)));
-  }
-  if (bottomHits.length > 0) {
-    farthestBottom = Math.max(...bottomHits.map((r) => Math.abs(r.z)));
-  }
-
-  if (topHits.length > 0 && bottomHits.length > 0) {
-    // Diffing top half and bottom half sensor that detect the truck
-    sensorCenter = (farthestBottom - farthestTop) / 2;
-  } else if (overallZMin <= overallZMax && overallZMin !== Infinity) {
-    // Fallback if it hasn't hit top half yet, estimate using bounding box
-    sensorCenter = (overallZMin + overallZMax) / 2;
+  if (entryLaser && exitLaser && entryLaser.hit && exitLaser.hit) {
+    sensorCenter = (entryLaser.distance - exitLaser.distance) / 2;
+    hasLaserHits = true;
+    entryDist = entryLaser.distance;
+    exitDist = exitLaser.distance;
   }
 
   return {
     readings,
     sensorCenter,
-    truthCenter: truck.z,
+    truthCenter,
     calcDetails: {
-      truckZMin,
-      truckZMax,
       overallZMin,
       overallZMax,
       debugSensors,
-      farthestTop,
-      farthestBottom,
+      farthestTop: 0,
+      farthestBottom: 0,
+      hasLaserHits,
+      entryDist,
+      exitDist,
     },
   };
 }

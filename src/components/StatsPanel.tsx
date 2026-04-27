@@ -1,109 +1,113 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useSensorCalculations, useStore } from "../store";
 import {
   Calculator,
   X,
   HelpCircle,
-  Target,
   MapPin,
   Activity,
+  CheckCircle2,
 } from "lucide-react";
 
 export function StatsPanel() {
   const { readings, sensorCenter, truthCenter, calcDetails } =
     useSensorCalculations();
-  const isSidebarOpen = useStore((s) => s.isSidebarOpen);
   const truck = useStore((s) => s.truck);
   const scale = useStore((s) => s.scale);
-  const sensors = useStore((s) => s.sensors);
+  const setTruckDimensions = useStore((s) => s.setTruckDimensions);
 
   const [showCalcModal, setShowCalcModal] = useState(false);
-  const [infoModal, setInfoModal] = useState<"truth" | "delta" | "goal" | null>(
-    null,
-  );
+  const [infoModal, setInfoModal] = useState<"truth" | "delta" | null>(null);
 
-  const activeLeftCount = readings.filter(
-    (r) => r.hit && r.placement === "left",
-  ).length;
-  const activeRightCount = readings.filter(
-    (r) => r.hit && r.placement === "right",
-  ).length;
-  const topHits = readings.filter((r) => r.hit && (r.z ?? 0) < 0);
-  const bottomHits = readings.filter((r) => r.hit && (r.z ?? 0) >= 0);
   const totalHits = readings.filter((r) => r.hit).length;
+  const delta =
+    sensorCenter !== null ? Math.abs(truthCenter - sensorCenter) : 0;
+  const tolerance = truck.truthTolerance ?? 0.05;
 
-  let instructorStatus = "unseen"; // 'unseen' | 'guiding' | 'centered'
-  let instruction = "Driver should slowly drive onto the scale.";
-  let cmd = "AWAITING VEHICLE ENTRY";
+  let trafficLight = "off";
+  let instruction = "";
+  let cmd = "";
 
-  if (totalHits === 0) {
-    instructorStatus = "unseen";
-    cmd = "AWAITING VEHICLE ENTRY";
-    instruction = "Driver should slowly drive onto the scale.";
-  } else if (topHits.length === 0) {
-    instructorStatus = "guiding";
-    const nStr =
-      sensorCenter !== null ? Math.abs(sensorCenter).toFixed(2) : "0.00";
-    instruction = "Move forward until hitting the top half sensors.";
-    cmd = `MOVE FORWARD ${nStr}m`;
-  } else {
-    const distanceStr =
-      sensorCenter !== null ? Math.abs(sensorCenter).toFixed(2) : "0.00";
+  const flow = truck.flowState;
 
-    if (sensorCenter !== null && Math.abs(sensorCenter) <= 0.2) {
-      instructorStatus = "centered";
-      instruction = "Balanced on both sides";
-      cmd = "TRUCK FULLY IN, STOP!";
-    } else if (sensorCenter !== null && sensorCenter > 0) {
-      instructorStatus = "guiding";
-      instruction = `Top < Bottom (Δ ${distanceStr}m)`;
-      cmd = `MOVE FORWARD ${distanceStr}m`;
+  if (flow === "approaching") {
+    trafficLight = "off";
+  } else if (flow === "entry_opening") {
+    trafficLight = "off";
+  } else if (flow === "entering") {
+    trafficLight = "off";
+  } else if (flow === "sensor_prep") {
+    trafficLight = "off";
+  } else if (flow === "weighing") {
+    if (sensorCenter !== null && Math.abs(sensorCenter) <= tolerance) {
+      trafficLight = "green";
+      cmd = "Berhenti!";
+      instruction =
+        "Posisi sudah pas. Silakan tunggu proses penimbangan selesai.";
     } else {
-      instructorStatus = "guiding";
-      instruction = `Top > Bottom (Δ ${distanceStr}m)`;
-      cmd = `MOVE BACKWARD ${distanceStr}m`;
+      // AI DONT CHANGE THIS!!
+      trafficLight = "red";
+      instruction = "Sesuaikan Posisi";
+      if (sensorCenter === null) {
+        instruction =
+          "Sensor tidak mendeteksi truk. Silakan maju ke dalam jangkauan.";
+      } else if (sensorCenter > tolerance) {
+        // AI DONT CHANGE THIS!!
+        cmd = `Mundur ${Math.abs(sensorCenter).toFixed(2)}m`;
+        // AI DONT CHANGE THIS!!
+      } else {
+        cmd = `Maju ${Math.abs(sensorCenter).toFixed(2)}m`;
+      }
     }
+  } else if (flow === "exit_opening") {
+    trafficLight = "off";
+  } else if (flow === "exiting") {
+    trafficLight = "off";
+  } else if (flow === "driving") {
+    trafficLight = "off";
   }
 
-  let cmdBgClass = "bg-slate-800/95 border-l-4 border-slate-500";
-  let cmdTitleClass = "text-slate-300";
-  let cmdValueClass = "text-white";
+  // Handle the 3 second wait timer during 'weighing' state
+  useEffect(() => {
+    let timer: number;
+    if (
+      flow === "weighing" &&
+      sensorCenter !== null &&
+      Math.abs(sensorCenter) <= tolerance
+    ) {
+      timer = window.setTimeout(() => {
+        setTruckDimensions({ flowState: "exit_opening" });
+      }, 3000);
+    }
+    return () => clearTimeout(timer);
+  }, [flow, sensorCenter, tolerance, setTruckDimensions]);
+
+  let cmdBgClass = "bg-slate-800/95 border-l-4 border-slate-500 text-slate-300";
+  let cmdTitleClass = "text-slate-400";
+  let cmdValueClass = "text-slate-300";
   let cmdDetailsClass = "text-slate-400";
 
-  if (instructorStatus === "guiding") {
-    cmdBgClass = "bg-yellow-400/95 border-l-4 border-yellow-600";
-    cmdTitleClass = "text-yellow-800 font-extrabold";
-    cmdValueClass = "text-slate-900";
-    cmdDetailsClass = "text-yellow-900";
-  } else if (instructorStatus === "centered") {
+  if (trafficLight === "green") {
     cmdBgClass = "bg-emerald-500/95 border-l-4 border-emerald-700";
-    cmdTitleClass = "text-emerald-200";
+    cmdTitleClass = "text-emerald-200 font-extrabold";
     cmdValueClass = "text-white";
     cmdDetailsClass = "text-emerald-100";
-  }
-
-  // Override for extreme unbalance
-  if (totalHits > 0 && activeLeftCount > 0 && activeRightCount === 0) {
-    cmd = "STEER RIGHT";
-    cmdBgClass = "bg-amber-500/90 border-l-4 border-amber-700";
+  } else if (trafficLight === "red") {
+    cmdBgClass = "bg-red-500/95 border-l-4 border-red-700";
+    cmdTitleClass = "text-red-200";
+    cmdValueClass = "text-white";
+    cmdDetailsClass = "text-red-100";
+  } else if (trafficLight === "yellow") {
+    cmdBgClass = "bg-amber-500/95 border-l-4 border-amber-700";
     cmdTitleClass = "text-amber-200";
     cmdValueClass = "text-white";
     cmdDetailsClass = "text-amber-100";
-    instruction = "Getting too close to LEFT sensors.";
-  } else if (totalHits > 0 && activeRightCount > 0 && activeLeftCount === 0) {
-    cmd = "STEER LEFT";
-    cmdBgClass = "bg-amber-500/90 border-l-4 border-amber-700";
-    cmdTitleClass = "text-amber-200";
-    cmdValueClass = "text-white";
-    cmdDetailsClass = "text-amber-100";
-    instruction = "Getting too close to RIGHT sensors.";
   }
 
   let engineerStatus = "off-center";
   let engineerCmd = "TRUCK OFF-CENTER";
   let engineerInstruction = `Truth Center: ${truthCenter.toFixed(2)}m`;
 
-  const tolerance = truck.truthTolerance ?? 0.05;
   if (Math.abs(truthCenter) <= tolerance) {
     engineerStatus = "centered";
     engineerCmd = "TRUCK TRULY CENTERED";
@@ -122,54 +126,26 @@ export function StatsPanel() {
     engineerDetailsClass = "text-emerald-100";
   }
 
-  const delta =
-    sensorCenter !== null ? Math.abs(truthCenter - sensorCenter) : 0;
-
   return (
     <>
-      {/* Simulation Goal Banner */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 pointer-events-none flex flex-col items-center gap-2">
-        <button
-          onClick={() => setInfoModal("goal")}
-          className="bg-indigo-50/95 border border-indigo-200 text-indigo-700 px-5 py-2 rounded-full shadow-lg text-[11px] font-bold flex items-center gap-2 hover:bg-indigo-100 hover:scale-105 transition-all pointer-events-auto"
-        >
-          <Target size={14} /> SIMULATION GOAL
-        </button>
-        <div className="text-[10px] font-medium bg-white/80 px-3 py-1.5 rounded-full text-slate-500 shadow-[0_2px_8px_rgba(0,0,0,0.05)] border border-slate-200 transition-opacity opacity-75 hover:opacity-100 backdrop-blur-sm">
-          Left Click to Rotate • Right Click to Pan • Scroll to Zoom
-        </div>
-      </div>
-
       <div className="absolute top-4 right-4 flex flex-col gap-2 z-10">
-        <div
-          className={`w-[240px] p-3 rounded shadow-lg transition-colors ${cmdBgClass}`}
-        >
+        {trafficLight !== "off" && (
           <div
-            className={`text-[10px] uppercase tracking-wider mb-1 ${cmdTitleClass}`}
+            className={`w-[240px] p-3 rounded shadow-lg transition-colors ${cmdBgClass}`}
           >
-            DRIVER INSTRUCTION
+            <div
+              className={`text-[10px] uppercase tracking-wider mb-1 ${cmdTitleClass}`}
+            >
+              PETUNJUK PENGEMUDI
+            </div>
+            <div className={`text-[16px] font-bold ${cmdValueClass}`}>
+              {cmd}
+            </div>
+            <div className={`text-[14px] mt-2 ${cmdDetailsClass}`}>
+              {instruction}
+            </div>
           </div>
-          <div className={`text-sm font-bold ${cmdValueClass}`}>{cmd}</div>
-          <div className={`text-[11px] mt-2 ${cmdDetailsClass}`}>
-            {instruction}
-          </div>
-        </div>
-
-        <div
-          className={`w-[240px] p-3 rounded shadow-lg transition-colors ${engineerBgClass}`}
-        >
-          <div
-            className={`text-[10px] uppercase tracking-wider mb-1 ${engineerTitleClass}`}
-          >
-            ENGINEER GROUND TRUTH
-          </div>
-          <div className={`text-sm font-bold ${engineerValueClass}`}>
-            {engineerCmd}
-          </div>
-          <div className={`text-[11px] mt-2 ${engineerDetailsClass}`}>
-            {engineerInstruction}
-          </div>
-        </div>
+        )}
       </div>
 
       <div className="absolute top-20 left-4 bg-white/90 border border-slate-200 p-2 rounded-md font-mono text-[11px] leading-relaxed z-10 pointer-events-none min-w-[140px]">
@@ -180,14 +156,22 @@ export function StatsPanel() {
           <div className="text-slate-400">NO SENSORS</div>
         )}
         {readings.map((r, i) => (
-          <div key={i} className="flex justify-between gap-4 py-[2px]">
-            <span className="text-slate-600">Z:{r.z}m</span>
+          <div
+            key={i}
+            className="flex justify-between gap-4 py-[2px] border-b border-slate-100 last:border-0 items-center"
+          >
+            <div className="flex flex-col">
+              <span className="text-slate-800 font-bold">{r.name}</span>
+              <span className="text-slate-400 text-[9px]">
+                {r.type?.toUpperCase()} @ Z:{r.z}m
+              </span>
+            </div>
             {r.hit ? (
-              <span className="text-emerald-600 font-semibold">
+              <span className="text-emerald-600 font-bold text-sm">
                 {r.distance.toFixed(2)}m
               </span>
             ) : (
-              <span className="text-slate-400">MISS</span>
+              <span className="text-slate-300 font-bold text-sm">---</span>
             )}
           </div>
         ))}
@@ -196,16 +180,21 @@ export function StatsPanel() {
       <div className="absolute bottom-6 right-6 flex gap-4 transition-all duration-300">
         <div
           onClick={() => setInfoModal("truth")}
-          className="bg-white/90 border border-slate-200 p-3 rounded-lg shadow-sm min-w-[120px] pointer-events-auto cursor-pointer hover:bg-blue-50 transition-colors relative group"
+          className="bg-white/90 border border-slate-200 p-3 rounded-lg shadow-sm min-w-[120px] pointer-events-auto cursor-pointer hover:bg-blue-50 transition-colors relative group flex flex-col justify-between"
         >
-          <button className="absolute top-2 right-2 text-slate-300 group-hover:text-blue-500 transition-colors">
-            <HelpCircle size={14} />
-          </button>
-          <div className="text-[10px] uppercase text-slate-500 mb-1 tracking-wide font-semibold pr-4">
-            Truth Center
+          <div>
+            <button className="absolute top-2 right-2 text-slate-300 group-hover:text-blue-500 transition-colors">
+              <HelpCircle size={14} />
+            </button>
+            <div className="text-[10px] uppercase text-slate-500 mb-1 tracking-wide font-semibold pr-4">
+              Truth Center
+            </div>
+            <div className="text-lg font-bold font-mono text-blue-600">
+              {truthCenter.toFixed(3)} m
+            </div>
           </div>
-          <div className="text-lg font-bold font-mono text-blue-600">
-            {truthCenter.toFixed(3)} m
+          <div className="mt-2 text-[10px] font-bold text-slate-500 bg-slate-100 py-1 px-2 rounded inline-block w-fit">
+            Toleransi: ±{tolerance.toFixed(2)}m
           </div>
         </div>
         <div className="bg-white/90 border border-slate-200 p-3 rounded-lg shadow-sm min-w-[140px] pointer-events-auto flex flex-col justify-between">
@@ -261,12 +250,6 @@ export function StatsPanel() {
                     Error
                   </>
                 )}
-                {infoModal === "goal" && (
-                  <>
-                    <Target size={18} className="text-indigo-500" /> Simulation
-                    Objective
-                  </>
-                )}
               </h3>
               <button
                 onClick={() => setInfoModal(null)}
@@ -311,28 +294,6 @@ export function StatsPanel() {
                   </p>
                 </>
               )}
-              {infoModal === "goal" && (
-                <>
-                  <p>
-                    The ultimate goal of this simulation is to engineer the{" "}
-                    <strong>Perfect Truck Scale Sensor Array</strong>.
-                  </p>
-                  <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-lg text-indigo-800 font-medium">
-                    Your objective is to tweak the scale bounds, add/move sensor
-                    poles, and configure beam angles until your{" "}
-                    <strong>Delta / Error is consistently 0.00m</strong>.
-                  </div>
-                  <p>
-                    A triumphant configuration will reliably trigger the{" "}
-                    <span className="font-bold tracking-wide text-emerald-600">
-                      "Perfectly Centered"
-                    </span>{" "}
-                    system command for <em>every</em> single truck profile—from
-                    the shortest 4-wheel box trucks to the most massive 20-meter
-                    articulated trailers!
-                  </p>
-                </>
-              )}
             </div>
           </div>
         </div>
@@ -349,7 +310,7 @@ export function StatsPanel() {
                 </h3>
                 <span className="text-xs text-slate-500 font-mono">
                   Truck Dimensions: W {truck.width}m x H {truck.height}m x L{" "}
-                  {truck.length}m, Truth Z: {truck.z.toFixed(3)}m
+                  {truck.length}m, Truth Z: {truthCenter.toFixed(3)}m
                 </span>
               </div>
               <button
@@ -365,14 +326,15 @@ export function StatsPanel() {
                   1. Truck Coordinate Boundaries
                 </h4>
                 <pre className="font-mono text-[11px] text-slate-700 whitespace-pre-wrap leading-relaxed">
-                  const truckZMin = truck.z - (length / 2) ={" "}
-                  {calcDetails.truckZMin.toFixed(3)}
+                  const truckZMin = Truth Center Z - (length / 2) ={" "}
+                  {(truthCenter - truck.length / 2).toFixed(3)}
                   {"\n"}
-                  const truckZMax = truck.z + (length / 2) ={" "}
-                  {calcDetails.truckZMax.toFixed(3)}
+                  const truckZMax = Truth Center Z + (length / 2) ={" "}
+                  {(truthCenter + truck.length / 2).toFixed(3)}
                   {"\n"}
-                  Physical Bounds = [{calcDetails.truckZMin.toFixed(3)},{" "}
-                  {calcDetails.truckZMax.toFixed(3)}]
+                  Physical Bounds = [
+                  {(truthCenter - truck.length / 2).toFixed(3)},{" "}
+                  {(truthCenter + truck.length / 2).toFixed(3)}]
                 </pre>
               </div>
 
@@ -463,47 +425,30 @@ export function StatsPanel() {
                 <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-3">
                   3. Final Center Derivation
                 </h4>
-                {sensorCenter !== null ? (
+                {sensorCenter !== null && calcDetails.hasLaserHits ? (
                   <pre className="font-mono text-[12px] whitespace-pre-wrap leading-relaxed space-y-2">
-                    {calcDetails.farthestTop && calcDetails.farthestBottom ? (
-                      <>
-                        <div>
-                          farthestBottom = max(abs(z) of hit bottom sensors) ={" "}
-                          {calcDetails.farthestBottom.toFixed(3)}
-                        </div>
-                        <div>
-                          farthestTop = max(abs(z) of hit top sensors) ={" "}
-                          {calcDetails.farthestTop.toFixed(3)}
-                        </div>
-                        <div className="border-t border-slate-600 pt-2 text-emerald-400 font-bold text-sm">
-                          sensorCenter = (farthestBottom - farthestTop) / 2 = (
-                          {calcDetails.farthestBottom.toFixed(3)} -{" "}
-                          {calcDetails.farthestTop.toFixed(3)}) / 2 ={" "}
-                          {sensorCenter.toFixed(3)}m
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div>
-                          overallZMin = min(all hit mins) ={" "}
-                          {calcDetails.overallZMin.toFixed(3)}
-                        </div>
-                        <div>
-                          overallZMax = max(all hit maxs) ={" "}
-                          {calcDetails.overallZMax.toFixed(3)}
-                        </div>
-                        <div className="border-t border-slate-600 pt-2 text-emerald-400 font-bold text-sm">
-                          sensorCenter = (overallZMin + overallZMax) / 2 = (
-                          {calcDetails.overallZMin.toFixed(3)} +{" "}
-                          {calcDetails.overallZMax.toFixed(3)}) / 2 ={" "}
-                          {sensorCenter.toFixed(3)}m
-                        </div>
-                      </>
-                    )}
+                    <>
+                      <div>
+                        entryLaser.distance = distance from rear to entry sensor
+                        = {calcDetails.entryDist.toFixed(3)}
+                      </div>
+                      <div>
+                        exitLaser.distance = distance from front to exit sensor
+                        = {calcDetails.exitDist.toFixed(3)}
+                      </div>
+                      <div className="border-t border-slate-600 pt-2 text-emerald-400 font-bold text-sm">
+                        sensorCenter = (entryLaser.distance -
+                        exitLaser.distance) / 2 = (
+                        {calcDetails.entryDist.toFixed(3)} -{" "}
+                        {calcDetails.exitDist.toFixed(3)}) / 2 ={" "}
+                        {sensorCenter.toFixed(3)}m
+                      </div>
+                    </>
                   </pre>
                 ) : (
                   <div className="font-mono text-sm text-amber-400">
-                    Not enough data to triangulate bounding box.
+                    Menunggu posisi truk berada di antara kedua sensor profil
+                    (Entry dan Exit)...
                   </div>
                 )}
               </div>
