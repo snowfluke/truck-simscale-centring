@@ -6,6 +6,8 @@ import {
   raycastScene,
   getTruckTransform,
   useActiveTruck,
+  TRACK_STRAIGHT_L,
+  TRACK_RADIUS,
 } from "../store";
 import { Grid, Text, Line, Html } from "@react-three/drei";
 import * as THREE from "three";
@@ -37,6 +39,7 @@ function buildBeamGeometry(
   const distances: number[] = [];
   const hitNormals: THREE.Vector3[] = [];
   const dirs: THREE.Vector3[] = [];
+  const truckHits: boolean[] = [];
 
   // Center ray index 0
   const centerHit = raycastScene(origin, dir, maxR, truckTransform, truckDim);
@@ -46,11 +49,12 @@ function buildBeamGeometry(
   distances.push(centerHit.distance);
   hitNormals.push(centerHit.normal);
   dirs.push(dir);
+  truckHits.push(centerHit.hitType === "truck");
 
   // Peripheral rays
   if (isLaser) {
     if (isLaser === "entry") {
-      const fanAngle = (5 * Math.PI) / 180; // 5 degree vertical sweep
+      const fanAngle = (beamW * Math.PI) / 180; // use beamW for the sweep angle
       for (let i = 0; i < raysCount; i++) {
         const fraction = i / (raysCount - 1);
         const angle = -fanAngle / 2 + fraction * fanAngle;
@@ -68,6 +72,41 @@ function buildBeamGeometry(
         distances.push(hit.distance);
         hitNormals.push(hit.normal);
         dirs.push(rDir);
+        truckHits.push(hit.hitType === "truck");
+      }
+    } else if (isLaser === "s-3d-lidar") {
+      const verticalRays = 24;
+      const horizontalRays = 72;
+      for (let v = 0; v < verticalRays; v++) {
+        const vAngle =
+          (v / (verticalRays - 1) - 0.5) * ((90 * Math.PI) / 180) -
+          (15 * Math.PI) / 180; // 90 degrees vertical FOV, tilted down by 15 deg
+        for (let h = 0; h < horizontalRays; h++) {
+          const hAngle = Math.PI / 2 + (h / (horizontalRays - 1)) * Math.PI; // 180 degrees horizontal facing truck (-x direction)
+
+          const rDir = new THREE.Vector3(
+            Math.cos(vAngle) * Math.cos(hAngle),
+            Math.sin(vAngle),
+            Math.cos(vAngle) * Math.sin(hAngle),
+          ).normalize();
+
+          const hit = raycastScene(
+            origin,
+            rDir,
+            maxR,
+            truckTransform,
+            truckDim,
+          );
+          const point = origin
+            .clone()
+            .add(rDir.clone().multiplyScalar(hit.distance));
+
+          hitPoints.push(point);
+          distances.push(hit.distance);
+          hitNormals.push(hit.normal);
+          dirs.push(rDir);
+          truckHits.push(hit.hitType === "truck");
+        }
       }
     }
   } else {
@@ -95,6 +134,7 @@ function buildBeamGeometry(
       distances.push(hit.distance);
       hitNormals.push(hit.normal);
       dirs.push(rDir);
+      truckHits.push(hit.hitType === "truck");
     }
   }
 
@@ -106,6 +146,7 @@ function buildBeamGeometry(
     raysCount,
     centerHit,
     isLaser,
+    truckHits,
   };
 }
 
@@ -178,6 +219,101 @@ function CustomBeam({
         side={THREE.DoubleSide}
       />
     </mesh>
+  );
+}
+
+function LidarPointCloud({
+  origin,
+  hitPoints,
+  truckHits,
+}: {
+  origin: THREE.Vector3;
+  hitPoints: THREE.Vector3[];
+  truckHits: boolean[];
+}) {
+  const linesGeoRef = useRef<THREE.BufferGeometry>(null);
+  const pointsGeoRef = useRef<THREE.BufferGeometry>(null);
+
+  React.useEffect(() => {
+    if (!linesGeoRef.current || !pointsGeoRef.current) return;
+
+    // Lines
+    const linePositions = new Float32Array(hitPoints.length * 6);
+    const lineColors = new Float32Array(hitPoints.length * 6);
+    const colorHit = new THREE.Color("#eab308"); // Yellow for hit
+    const colorMiss = new THREE.Color("#3b82f6"); // Blue for miss
+
+    for (let i = 0; i < hitPoints.length; i++) {
+      linePositions[i * 6] = origin.x;
+      linePositions[i * 6 + 1] = origin.y;
+      linePositions[i * 6 + 2] = origin.z;
+      linePositions[i * 6 + 3] = hitPoints[i].x;
+      linePositions[i * 6 + 4] = hitPoints[i].y;
+      linePositions[i * 6 + 5] = hitPoints[i].z;
+
+      const color = truckHits[i] ? colorHit : colorMiss;
+      lineColors[i * 6] = color.r;
+      lineColors[i * 6 + 1] = color.g;
+      lineColors[i * 6 + 2] = color.b;
+      lineColors[i * 6 + 3] = color.r;
+      lineColors[i * 6 + 4] = color.g;
+      lineColors[i * 6 + 5] = color.b;
+    }
+    linesGeoRef.current.setAttribute(
+      "position",
+      new THREE.BufferAttribute(linePositions, 3),
+    );
+    linesGeoRef.current.setAttribute(
+      "color",
+      new THREE.BufferAttribute(lineColors, 3),
+    );
+
+    // Points
+    const pointPositions = new Float32Array(hitPoints.length * 3);
+    const pointColors = new Float32Array(hitPoints.length * 3);
+    for (let i = 0; i < hitPoints.length; i++) {
+      pointPositions[i * 3] = hitPoints[i].x;
+      pointPositions[i * 3 + 1] = hitPoints[i].y;
+      pointPositions[i * 3 + 2] = hitPoints[i].z;
+
+      const color = truckHits[i] ? colorHit : colorMiss;
+      pointColors[i * 3] = color.r;
+      pointColors[i * 3 + 1] = color.g;
+      pointColors[i * 3 + 2] = color.b;
+    }
+    pointsGeoRef.current.setAttribute(
+      "position",
+      new THREE.BufferAttribute(pointPositions, 3),
+    );
+    pointsGeoRef.current.setAttribute(
+      "color",
+      new THREE.BufferAttribute(pointColors, 3),
+    );
+  }, [origin, hitPoints, truckHits]);
+
+  return (
+    <group>
+      <lineSegments>
+        <bufferGeometry ref={linesGeoRef} />
+        <lineBasicMaterial
+          vertexColors
+          transparent
+          opacity={0.15}
+          depthWrite={false}
+          linewidth={1.5}
+        />
+      </lineSegments>
+      <points>
+        <bufferGeometry ref={pointsGeoRef} />
+        <pointsMaterial
+          vertexColors
+          size={0.3}
+          transparent
+          opacity={1.0}
+          sizeAttenuation={true}
+        />
+      </points>
+    </group>
   );
 }
 
@@ -296,8 +432,8 @@ export function Road() {
   const road = useStore((s) => s.road);
   const selectedEntity = useStore((s) => s.selectedEntity);
   const setSelectedEntity = useStore((s) => s.setSelectedEntity);
-  const straightL = 60;
-  const radius = 10;
+  const straightL = TRACK_STRAIGHT_L;
+  const radius = TRACK_RADIUS;
   return (
     <group>
       {/* Straight 1 */}
@@ -404,9 +540,68 @@ export function Road() {
   );
 }
 
+function TrafficLightModel({
+  position,
+  rotation,
+  tlColor,
+}: {
+  position: [number, number, number];
+  rotation: [number, number, number];
+  tlColor: string;
+}) {
+  return (
+    <group position={position} rotation={rotation}>
+      <mesh position={[0, 2, 0]}>
+        <cylinderGeometry args={[0.05, 0.05, 4]} />
+        <meshStandardMaterial color="#475569" />
+      </mesh>
+      <mesh position={[0, 4, 0]}>
+        <boxGeometry args={[0.4, 1.2, 0.4]} />
+        <meshStandardMaterial color="#1e293b" />
+      </mesh>
+      {/* Green Light */}
+      <mesh position={[0, 4.3, 0.21]}>
+        <circleGeometry args={[0.12, 16]} />
+        <meshBasicMaterial
+          color={tlColor === "#10b981" ? "#10b981" : "#064e3b"}
+        />
+      </mesh>
+      {/* Red Light */}
+      <mesh position={[0, 3.7, 0.21]}>
+        <circleGeometry args={[0.12, 16]} />
+        <meshBasicMaterial
+          color={tlColor === "#ef4444" ? "#ef4444" : "#7f1d1d"}
+        />
+      </mesh>
+    </group>
+  );
+}
+
 export function FacilityDecorations() {
   const scale = useStore((s) => s.scale);
   const { truthCenter, sensorCenter, activeTruck } = useSensorCalculations();
+  const sensorStrategy = useStore((s) => s.sensorStrategy);
+
+  // Determine traffic light color natively based on state similar to StatsPanel
+  let tlColor = "#333";
+  if (
+    activeTruck.flowState === "weighing" ||
+    activeTruck.flowState === "weighing_complete"
+  ) {
+    const tolerance =
+      sensorStrategy === "3d_lidar"
+        ? activeTruck.flowState === "weighing_complete"
+          ? 1.5
+          : 1.0
+        : activeTruck.flowState === "weighing_complete"
+          ? 0.2
+          : 0.05;
+    if (sensorCenter !== null && Math.abs(sensorCenter) <= tolerance) {
+      tlColor = "#10b981"; // Green
+    } else {
+      tlColor = "#ef4444"; // Red
+    }
+  }
 
   // Position of cabin relative to the road/scale center
   const cabinX = -scale.width / 2 - 2.5;
@@ -446,6 +641,19 @@ export function FacilityDecorations() {
 
   return (
     <group>
+      {/* Traffic Light 1 at Z=60 corner */}
+      <TrafficLightModel
+        position={[useStore.getState().road.width / 2 + 1.5, 0, 60]}
+        rotation={[0, Math.PI, 0]}
+        tlColor={tlColor}
+      />
+      {/* Traffic Light 2 at Z=-60 corner */}
+      <TrafficLightModel
+        position={[useStore.getState().road.width / 2 + 1.5, 0, -60]}
+        rotation={[0, Math.PI, 0]}
+        tlColor={tlColor}
+      />
+
       {/* Operator Cabin */}
       <group position={[cabinX, 1.5, cabinZ]}>
         {/* Main Building Body */}
@@ -957,12 +1165,12 @@ function SensorPole({
   const selectedEntity = useStore((s) => s.selectedEntity);
   const setSelectedEntity = useStore((s) => s.setSelectedEntity);
   const truck = useActiveTruck();
+  const road = useStore((s) => s.road);
 
-  const xOffset = placement === "center" ? 0 : scale.width / 2 + 0.3;
+  const xOffset = placement === "center" ? 0 : road.width / 2 + 1.5;
   const xDir = placement === "left" ? -1 : placement === "center" ? 0 : 1;
   const posX = placement === "center" ? 0 : xDir * xOffset;
 
-  const road = useStore((s) => s.road);
   const mR = maxRange || 4.5;
   const tiltVRads = (tiltVertical * Math.PI) / 180;
   const tiltHRads = (tiltHorizontal * Math.PI) / 180;
@@ -1029,7 +1237,7 @@ function SensorPole({
       const radius = road.width / 2 + 0.5;
       return new THREE.Vector3(
         pivotX + radius * Math.cos(angle),
-        height + radius * Math.sin(angle),
+        1.0 + radius * Math.sin(angle),
         z,
       );
     }
@@ -1055,9 +1263,11 @@ function SensorPole({
 
   const isLaser = type === "laser";
   const laserType = isLaser
-    ? id === "s-entry-laser"
-      ? "entry"
-      : "exit"
+    ? id === "s-3d-lidar"
+      ? "s-3d-lidar"
+      : id === "s-entry-laser"
+        ? "entry"
+        : "exit"
     : false;
   const isLaserActive = isLaser ? flowState === "weighing" : true;
 
@@ -1135,6 +1345,15 @@ function SensorPole({
               <boxGeometry args={[0.2, 0.2, 0.3]} />
               <meshStandardMaterial color="#3b82f6" />
             </mesh>
+            {id === "s-3d-lidar" && (
+              <mesh position={[-0.1, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
+                {/* Shell to block backward scan visually */}
+                <cylinderGeometry
+                  args={[0.15, 0.15, 0.22, 16, 1, false, 0, Math.PI]}
+                />
+                <meshStandardMaterial color="#1e293b" side={THREE.DoubleSide} />
+              </mesh>
+            )}
           </group>
         </group>
       )}
@@ -1178,6 +1397,12 @@ function SensorPole({
                 opacity={0.4}
               />
             </>
+          ) : laserType === "s-3d-lidar" ? (
+            <LidarPointCloud
+              origin={origin}
+              hitPoints={beamData.hitPoints}
+              truckHits={beamData.truckHits}
+            />
           ) : (
             <>
               <CustomBeam
@@ -1242,9 +1467,12 @@ export function CrossbarGate({
   // Smooth animate the angle
   useFrame((state, delta) => {
     setAngle((curr) => {
+      const safeDelta = Math.min(delta, 0.1);
       const diff = targetAngle - curr;
       if (Math.abs(diff) < 0.001) return targetAngle;
-      return curr + diff * (delta * 10);
+      let step = diff * (safeDelta * 10);
+      if (Math.abs(step) > Math.abs(diff)) step = diff;
+      return curr + step;
     });
   });
 
@@ -1278,13 +1506,13 @@ function FacilityExitGates() {
   const trucks = useStore((s) => s.trucks);
   if (!trucks || trucks.length === 0) return null;
 
-  const straightL = 60;
-  const curveL = Math.PI * 10;
-  const startD = straightL + curveL; // 91.41
+  const straightL = TRACK_STRAIGHT_L;
+  const curveL = Math.PI * TRACK_RADIUS;
+  const startD = straightL + curveL;
 
-  // d goes from 91.41 to 151.41 on this side. z goes from 30 to -30.
-  const dAtFirstGate = startD + 30 - 10.5; // reaches first gate
-  const dAtSecondGate = startD + 30 + 10.5; // reaches second gate
+  // d goes from startD to startD + straightL on this side. z goes from straightL/2 to -straightL/2.
+  const dAtFirstGate = startD + straightL / 2 - 10.5; // reaches first gate
+  const dAtSecondGate = startD + straightL / 2 + 10.5; // reaches second gate
 
   let openFirst = false;
   let openSecond = false;
@@ -1295,12 +1523,12 @@ function FacilityExitGates() {
   }
 
   return (
-    <group position={[-20, 0, 0]} rotation={[0, 0, 0]}>
-      <CrossbarGate z={10.5} isOpen={openFirst} reverse={true} />
-      <CrossbarGate z={-10.5} isOpen={openSecond} reverse={true} />
+    <group position={[-TRACK_RADIUS * 2, 0, 0]} rotation={[0, Math.PI, 0]}>
+      <CrossbarGate z={-10.5} isOpen={openFirst} reverse={false} />
+      <CrossbarGate z={10.5} isOpen={openSecond} reverse={false} />
 
       {/* Goodbye Billboard */}
-      <group position={[0, 4.0, -10.5]}>
+      <group position={[0, 4.0, 10.5]}>
         <mesh position={[0, 0, 0.1]}>
           <boxGeometry args={[7, 1.5, 0.2]} />
           <meshStandardMaterial color="#0f172a" />
@@ -1325,6 +1553,7 @@ export function Sensors() {
   const scale = useStore((s) => s.scale);
   const selectedEntity = useStore((s) => s.selectedEntity);
   const trucks = useStore((s) => s.trucks) || [activeTruck];
+  const sensorStrategy = useStore((s) => s.sensorStrategy);
 
   // A truck needs the entry gate open if its front is very close to it (-11.5) up to when its rear passes it (-10.5)
   // We use the flowState or z-position:
@@ -1337,8 +1566,8 @@ export function Sensors() {
       exitOpen = true;
     } else {
       // If a truck is physically under the exit gate, force it open
-      const tFront = -30 + t.d + t.length / 2;
-      const tRear = -30 + t.d - t.length / 2;
+      const tFront = -(TRACK_STRAIGHT_L / 2) + t.d + t.length / 2;
+      const tRear = -(TRACK_STRAIGHT_L / 2) + t.d - t.length / 2;
       if (tFront > 9.0 && tRear < 11.5) exitOpen = true;
       if (tFront > -11.5 && tRear < -10.3) entryOpen = true; // Extra safety for entry
     }
@@ -1352,23 +1581,27 @@ export function Sensors() {
 
       <FacilityExitGates />
 
-      {/* Central Sensor box near the sonar */}
-      <mesh position={[-scale.width / 2 - 0.5, 0.2, 0]}>
-        <boxGeometry args={[0.4, 0.4, 0.4]} />
-        <meshStandardMaterial color="#1e293b" />
-      </mesh>
+      {sensorStrategy !== "3d_lidar" && (
+        <>
+          {/* Central Sensor box near the sonar */}
+          <mesh position={[-scale.width / 2 - 0.5, 0.2, 0]}>
+            <boxGeometry args={[0.4, 0.4, 0.4]} />
+            <meshStandardMaterial color="#1e293b" />
+          </mesh>
 
-      {/* Cable from entry gate (-10.5) to central box (0) */}
-      <mesh position={[-scale.width / 2 - 0.5, 0.02, -5.25]}>
-        <boxGeometry args={[0.08, 0.04, 10.5]} />
-        <meshStandardMaterial color="#334155" />
-      </mesh>
+          {/* Cable from entry gate (-10.5) to central box (0) */}
+          <mesh position={[-scale.width / 2 - 0.5, 0.02, -5.25]}>
+            <boxGeometry args={[0.08, 0.04, 10.5]} />
+            <meshStandardMaterial color="#334155" />
+          </mesh>
 
-      {/* Cable from exit gate (+10.5) to central box (0) */}
-      <mesh position={[-scale.width / 2 - 0.5, 0.02, 5.25]}>
-        <boxGeometry args={[0.08, 0.04, 10.5]} />
-        <meshStandardMaterial color="#334155" />
-      </mesh>
+          {/* Cable from exit gate (+10.5) to central box (0) */}
+          <mesh position={[-scale.width / 2 - 0.5, 0.02, 5.25]}>
+            <boxGeometry args={[0.08, 0.04, 10.5]} />
+            <meshStandardMaterial color="#334155" />
+          </mesh>
+        </>
+      )}
 
       {sensors.map((sens) => {
         const tV = sens.tiltVertical ?? (sens as any).tilt ?? 0;
@@ -1380,13 +1613,14 @@ export function Sensors() {
             <Line
               points={[
                 [
-                  (scale.width / 2 + 0.3) *
+                  (useStore.getState().road.width / 2 + 1.5) *
                     (sens.placement === "left" ? -1 : 1),
                   0.01,
                   sens.z,
                 ],
                 [
-                  (scale.width / 2) * (sens.placement === "left" ? -1 : 1),
+                  (useStore.getState().road.width / 2) *
+                    (sens.placement === "left" ? -1 : 1),
                   0.01,
                   sens.z,
                 ],
@@ -1397,7 +1631,8 @@ export function Sensors() {
             {selectedEntity === "road" && (
               <Html
                 position={[
-                  (scale.width / 2 + 1) * (sens.placement === "left" ? -1 : 1),
+                  (useStore.getState().road.width / 2 + 1) *
+                    (sens.placement === "left" ? -1 : 1),
                   0.5,
                   sens.z,
                 ]}

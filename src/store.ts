@@ -2,11 +2,13 @@ import * as THREE from "three";
 import { create } from "zustand";
 import { SensorItem, SensorProfile, TruckProfile } from "./types";
 
-export const TOTAL_L = 60 * 2 + Math.PI * 10 * 2;
+export const TRACK_STRAIGHT_L = 120;
+export const TRACK_RADIUS = 20;
+export const TOTAL_L = TRACK_STRAIGHT_L * 2 + Math.PI * TRACK_RADIUS * 2;
 
 export function getTruckTransform(d: number) {
-  const straightL = 60;
-  const radius = 10;
+  const straightL = TRACK_STRAIGHT_L;
+  const radius = TRACK_RADIUS;
   const curveL = Math.PI * radius;
   const totalL = straightL * 2 + curveL * 2;
   d = ((d % totalL) + totalL) % totalL;
@@ -403,6 +405,9 @@ interface GameState {
   // UI
   isSidebarOpen: boolean;
   toggleSidebar: () => void;
+
+  sensorStrategy: "lidar_tof" | "3d_lidar";
+  toggleSensorStrategy: () => void;
 }
 
 export const useStore = create<GameState>((set, get) => ({
@@ -538,7 +543,7 @@ export const useStore = create<GameState>((set, get) => ({
     {
       id: "s-exit-laser",
       type: "laser",
-      name: "Exit Laser",
+      name: "ToF Sensor",
       z: 10.5,
       height: 0.6,
       beamWidth: 2,
@@ -550,13 +555,13 @@ export const useStore = create<GameState>((set, get) => ({
     {
       id: "s-entry-laser",
       type: "laser",
-      name: "Entry Laser",
+      name: "2D LiDAR",
       z: -10.5,
       height: 0.6,
-      beamWidth: 2,
+      beamWidth: 80,
       tiltVertical: 0,
       tiltHorizontal: 0,
-      maxRange: 15,
+      maxRange: 10,
       placement: "center",
     },
   ] as SensorItem[],
@@ -667,6 +672,13 @@ export const useStore = create<GameState>((set, get) => ({
 
   isSidebarOpen: true,
   toggleSidebar: () => set((s) => ({ isSidebarOpen: !s.isSidebarOpen })),
+
+  sensorStrategy: "lidar_tof",
+  toggleSensorStrategy: () =>
+    set((s) => ({
+      sensorStrategy:
+        s.sensorStrategy === "lidar_tof" ? "3d_lidar" : "lidar_tof",
+    })),
 }));
 
 export const useActiveTruck = () =>
@@ -682,14 +694,38 @@ export const useActiveTruck = () =>
 export function useSensorCalculations() {
   const defaultTruck = useStore((s) => s.truck);
   const trucks = useStore((s) => s.trucks);
-  const sensors = useStore((s) => s.sensors);
+  const rawSensors = useStore((s) => s.sensors);
   const scale = useStore((s) => s.scale);
+  const road = useStore((s) => s.road);
+  const sensorStrategy = useStore((s) => s.sensorStrategy);
+
+  const sensors =
+    sensorStrategy === "3d_lidar"
+      ? [
+          {
+            id: "s-3d-lidar",
+            type: "laser",
+            name: "3D LiDAR",
+            z: 0,
+            height: 2,
+            beamWidth: 360,
+            tiltVertical: 0,
+            tiltHorizontal: 0,
+            maxRange: 15,
+            placement: "right",
+          } as any,
+        ]
+      : rawSensors;
 
   // Find active truck (the one inside or closest to the scale gates: -10.5 to 10.5)
-  // Distance metric: Z = -30 + d -> Z between -10.5 and 10.5 means d between 19.5 and 40.5
+  // Distance metric: Z = -TRACK_STRAIGHT_L/2 + d -> Z between -10.5 and 10.5 means d between TRACK_STRAIGHT_L/2 - 10.5 and TRACK_STRAIGHT_L/2 + 10.5
   let activeTruck =
     trucks && trucks.length > 0
-      ? trucks.find((t) => t.d >= 19.5 && t.d <= 40.5) || trucks[0]
+      ? trucks.find(
+          (t) =>
+            t.d >= TRACK_STRAIGHT_L / 2 - 10.5 &&
+            t.d <= TRACK_STRAIGHT_L / 2 + 10.5,
+        ) || trucks[0]
       : defaultTruck;
 
   const truck = activeTruck;
@@ -725,7 +761,7 @@ export function useSensorCalculations() {
     const poleX =
       s.placement === "center"
         ? 0
-        : (scale.width / 2 + 0.3) * (s.placement === "left" ? -1 : 1);
+        : (road.width / 2 + 1.5) * (s.placement === "left" ? -1 : 1);
 
     const xDir = s.placement === "left" ? 1 : s.placement === "center" ? 0 : -1;
     const zDirBase =
@@ -796,30 +832,50 @@ export function useSensorCalculations() {
             .normalize();
           testDirs.push(rDir);
         }
+      } else if (s.id === "s-3d-lidar") {
+        const verticalRays = 24;
+        const horizontalRays = 72;
+        for (let v = 0; v < verticalRays; v++) {
+          const vAngle =
+            (v / (verticalRays - 1) - 0.5) * ((90 * Math.PI) / 180) -
+            (15 * Math.PI) / 180; // 90 degrees vertical FOV, tilted down by 15 deg
+          for (let h = 0; h < horizontalRays; h++) {
+            const hAngle = Math.PI / 2 + (h / (horizontalRays - 1)) * Math.PI; // 180 degrees horizontal facing truck (-x direction)
+
+            const rDir = new THREE.Vector3(
+              Math.cos(vAngle) * Math.cos(hAngle),
+              Math.sin(vAngle),
+              Math.cos(vAngle) * Math.sin(hAngle),
+            ).normalize();
+            testDirs.push(rDir);
+          }
+        }
       }
 
-      for (const testDir of testDirs) {
-        const d = testDir.clone();
-        const res = raycastScene(origin, d, effectiveMaxR, tform, truckDim);
+      if (effectiveMaxR > 0) {
+        for (const testDir of testDirs) {
+          const d = testDir.clone();
+          const res = raycastScene(origin, d, effectiveMaxR, tform, truckDim);
 
-        if (res.hitType === "truck") {
-          const rDir = d
-            .clone()
-            .sub(res.normal.clone().multiplyScalar(2 * d.dot(res.normal)))
-            .normalize();
-          const toSensor = d.clone().negate();
-          const bounceAngle = rDir.angleTo(toSensor);
+          if (res.hitType === "truck") {
+            const rDir = d
+              .clone()
+              .sub(res.normal.clone().multiplyScalar(2 * d.dot(res.normal)))
+              .normalize();
+            const toSensor = d.clone().negate();
+            const bounceAngle = rDir.angleTo(toSensor);
 
-          if (isLaser || bounceAngle <= halfAngle * 0.9) {
-            hit = true;
-            distance = Math.min(distance, res.distance);
+            if (isLaser || bounceAngle <= halfAngle * 0.9) {
+              hit = true;
+              distance = Math.min(distance, res.distance);
 
-            const hitPt = origin.clone().add(d.multiplyScalar(res.distance));
-            overallZMinLocal = Math.min(overallZMinLocal, hitPt.z);
-            overallZMaxLocal = Math.max(overallZMaxLocal, hitPt.z);
+              const hitPt = origin.clone().add(d.multiplyScalar(res.distance));
+              overallZMinLocal = Math.min(overallZMinLocal, hitPt.z);
+              overallZMaxLocal = Math.max(overallZMaxLocal, hitPt.z);
 
-            if (testDir === dir) {
-              hitNormalVec = res.normal;
+              if (testDir === dir) {
+                hitNormalVec = res.normal;
+              }
             }
           }
         }
@@ -893,6 +949,9 @@ export function useSensorCalculations() {
 
   const entryLaser = readings.find((r) => r.id === "s-entry-laser");
   const exitLaser = readings.find((r) => r.id === "s-exit-laser");
+  const lidar3d = readings.find((r) => r.id === "s-3d-lidar");
+
+  let measuredLength = 0;
 
   if (entryLaser && exitLaser && entryLaser.hit && exitLaser.hit) {
     sensorCenter =
@@ -900,6 +959,18 @@ export function useSensorCalculations() {
     hasLaserHits = true;
     entryDist = entryLaser.horizontalDistance;
     exitDist = exitLaser.horizontalDistance;
+    // Note: for 2D sensors positioned at -10.5 and 10.5
+    measuredLength = 21 - (entryDist + exitDist);
+  } else if (lidar3d && lidar3d.hit) {
+    const dSens = debugSensors.find((s) => s.id === "s-3d-lidar");
+    if (dSens && dSens.sZMin !== Infinity && dSens.sZMax !== -Infinity) {
+      // Using the min and max Z coordinates of all 3D LiDAR hit points to find the truck's midpoint
+      sensorCenter = (dSens.sZMax + dSens.sZMin) / 2;
+      hasLaserHits = true;
+      entryDist = Math.abs(dSens.sZMin - lidar3d.z);
+      exitDist = Math.abs(dSens.sZMax - lidar3d.z);
+      measuredLength = Math.abs(dSens.sZMax - dSens.sZMin);
+    }
   }
 
   return {
@@ -915,6 +986,7 @@ export function useSensorCalculations() {
       hasLaserHits,
       entryDist,
       exitDist,
+      measuredLength,
     },
     activeTruck,
   };

@@ -24,7 +24,11 @@ export function StatsPanel() {
 
   // Use activeTruck properties for everything
   const truck = activeTruck || useStore.getState().truck;
-  const tolerance = truck.truthTolerance ?? 0.05;
+  const sensorStrategy = useStore((s) => s.sensorStrategy);
+  let tolerance = truck.truthTolerance ?? 0.05;
+  if (sensorStrategy === "3d_lidar") {
+    tolerance = 1.0;
+  }
 
   let trafficLight = "off";
   let instruction = "";
@@ -430,23 +434,56 @@ export function StatsPanel() {
                 </h4>
                 {sensorCenter !== null && calcDetails.hasLaserHits ? (
                   <pre className="font-mono text-[12px] whitespace-pre-wrap leading-relaxed space-y-2">
-                    <>
-                      <div>
-                        entryLaser.distance = distance from rear to entry sensor
-                        = {calcDetails.entryDist.toFixed(3)}
-                      </div>
-                      <div>
-                        exitLaser.distance = distance from front to exit sensor
-                        = {calcDetails.exitDist.toFixed(3)}
-                      </div>
-                      <div className="border-t border-slate-600 pt-2 text-emerald-400 font-bold text-sm">
-                        sensorCenter = (entryLaser.distance -
-                        exitLaser.distance) / 2 = (
-                        {calcDetails.entryDist.toFixed(3)} -{" "}
-                        {calcDetails.exitDist.toFixed(3)}) / 2 ={" "}
-                        {sensorCenter.toFixed(3)}m
-                      </div>
-                    </>
+                    {sensorStrategy === "3d_lidar" ? (
+                      <>
+                        <div>
+                          LiDAR hit Z_min ={" "}
+                          {(
+                            calcDetails.debugSensors.find(
+                              (s: any) => s.id === "s-3d-lidar",
+                            )?.sZMin ?? 0
+                          ).toFixed(3)}
+                        </div>
+                        <div>
+                          LiDAR hit Z_max ={" "}
+                          {(
+                            calcDetails.debugSensors.find(
+                              (s: any) => s.id === "s-3d-lidar",
+                            )?.sZMax ?? 0
+                          ).toFixed(3)}
+                        </div>
+                        <div className="text-blue-400 font-bold">
+                          measuredLength = Z_max - Z_min ={" "}
+                          {calcDetails.measuredLength?.toFixed(3) || "0.000"}m
+                        </div>
+                        <div className="border-t border-slate-600 pt-2 text-emerald-400 font-bold text-sm">
+                          sensorCenter = (Z_max + Z_min) / 2 ={" "}
+                          {sensorCenter.toFixed(3)}m
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div>
+                          entryLaser.distance = distance from rear to entry
+                          sensor = {calcDetails.entryDist.toFixed(3)}
+                        </div>
+                        <div>
+                          exitLaser.distance = distance from front to exit
+                          sensor = {calcDetails.exitDist.toFixed(3)}
+                        </div>
+                        <div className="text-blue-400 font-bold">
+                          measuredLength = 21m - (entry + exit) ={" "}
+                          {calcDetails.measuredLength?.toFixed(3) || "0.000"}m
+                        </div>
+                        <div className="border-t border-slate-600 pt-2 text-emerald-400 font-bold text-sm">
+                          sensorCenter = (entryLaser.distance -
+                          exitLaser.distance) / 2 = (
+                          {calcDetails.entryDist.toFixed(3)} -{" "}
+                          {calcDetails.exitDist.toFixed(3)}) / 2 ={" "}
+                          {sensorCenter.toFixed(3)}m
+                        </div>
+                      </>
+                    )}
                   </pre>
                 ) : (
                   <div className="font-mono text-sm text-amber-400">
